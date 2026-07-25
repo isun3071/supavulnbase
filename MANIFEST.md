@@ -1,6 +1,6 @@
 # MANIFEST — ground truth
 
-**Status: planting pass in progress.** 23 findings, 13 controls.
+**Status: planting pass in progress.** 25 findings, 15 controls.
 
 Ground truth is also served over HTTP at **`GET {basePath}/__manifest`**
 (`http://localhost:8090/app/__manifest`). `verify.sh` asserts that the ids
@@ -29,7 +29,10 @@ they are recorded under [Falsified during audit](#falsified-during-audit),
 because a fixture whose answer key contains findings that are not really there is
 worse than no fixture.
 
-`/__manifest` (the HTTP-served copy) is **not implemented yet**.
+One entry, `auth-001`, was found by the user **after** the planting pass, by
+asking a question the manifest could not answer. It is labelled as a natural
+omission rather than a plant. Expect more of these: the manifest describes what
+has been checked, not everything that is true.
 
 ---
 
@@ -42,6 +45,7 @@ worse than no fixture.
 | Tables | `public.profiles`, `public.projects`, `public.updates` |
 | Created via | plain SQL migration (`supabase/migrations/20260612093000_init.sql`) |
 | Seed | 4 users, 7 projects, 13 updates, overlapping owners |
+| Note | A grader run mutates this. Writes are wide open by design and self-registration works, so user and row counts grow. `verify.sh` treats seed counts as lower bounds and tests relationships, not fixed numbers. `docker compose down -v` resets. |
 
 ---
 
@@ -657,6 +661,60 @@ worse than no fixture.
   notes: |
     Same resolution trap as probe-001, second path so the behaviour is not a
     one-off. The token is synthetic and inert.
+
+- id: auth-001
+  name: No rate limiting on the password grant — unlimited credential stuffing
+  category: broken-authentication
+  cwe: CWE-307
+  owasp_2025: A07
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: true          # also directly via baas-direct
+  location: POST /auth/v1/token?grant_type=password
+  severity: high
+  is_control: false
+  paired_control: ctl-014
+  occurred: naturally
+  verified_by: |
+    45 consecutive failed logins (25 against nonexistent accounts, 20 with
+    wrong passwords against a real one): every response 400, zero 429s, no
+    backoff, no lockout. The account authenticated normally immediately after.
+    Re-checked in verify.sh with a 25-attempt burst.
+  detection: |
+    POST wrong credentials repeatedly to the token endpoint and count 429s.
+    There are none. The login form at {basePath}/login posts here.
+  notes: |
+    FOUND AFTER THE PLANTING PASS, BY THE USER, NOT BY DESIGN. This is the
+    first behaviour the manifest did not describe, and it is recorded as a
+    natural omission rather than a plant: self-hosted GoTrue does not
+    rate-limit the password grant by default, while hosted Supabase does. The
+    stack simply inherited the default and nobody decided otherwise.
+    It is genuinely reachable two ways — by crawling to the login form, or by
+    hitting the Supabase auth API directly — so unlike most entries here it is
+    not gated behind a single mechanism. Left that way because narrowing it
+    would mean breaking the login form, which is not worth it.
+
+- id: auth-002
+  name: Weak password policy — six characters, no complexity, no breach check
+  category: broken-authentication
+  cwe: CWE-521
+  owasp_2025: A07
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: true
+  location: POST /auth/v1/signup, and {basePath}/signup
+  severity: low
+  is_control: false
+  paired_control: null
+  occurred: naturally
+  verified_by: |
+    signup with password "aaaaaa" -> HTTP 200, account created
+    signup with password "a"      -> HTTP 422 (minimum length 6 enforced)
+    So the only rule is length >= 6. No complexity requirement, no dictionary
+    or breach check, and a single repeated character is accepted.
+  detection: Register with "aaaaaa" through {basePath}/signup or the auth API.
+  notes: |
+    GoTrue default. Compounds auth-001: unlimited guessing against passwords
+    with roughly no entropy floor. Recorded separately because a grader may
+    detect one and not the other.
 ```
 
 ---
@@ -905,6 +963,51 @@ worse than no fixture.
     confirm it. The genuine gap on this table is INSERT only — see rls-004.
     This is the counterpart trap to ctl-002: there, 204 hid a correct denial;
     here, permissive-looking SQL hides an unreachable one.
+
+- id: ctl-014
+  name: Other auth endpoints ARE rate limited
+  category: not-a-finding
+  discovery_mechanism: baas-direct
+  location: POST /auth/v1/recover and /auth/v1/otp
+  is_control: true
+  occurred: naturally
+  verified_by: |
+    /auth/v1/recover, 12 rapid calls -> 200 then 429 for every subsequent one
+    /auth/v1/otp,      8 rapid calls -> 200 then 429 for every subsequent one
+    Signup still returned 200 afterwards, so the limiter is scoped to the
+    email-sending endpoints and does not spill onto registration.
+  why_flagging_this_is_wrong: |
+    Direct pair for auth-001, and a naturally occurring one — nothing here was
+    configured for the fixture.
+    A grader that concludes "this API has no rate limiting" from the login
+    endpoint alone is wrong: two endpoints on the same service, same host,
+    same port are limited aggressively, tripping after a single request. The
+    correct finding is per-endpoint ("the password grant is unlimited"), not
+    per-service ("auth is unlimited"). A report phrased the second way is
+    overclaiming and this control is what catches it.
+
+- id: ctl-015
+  name: Login errors do not permit account enumeration
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: POST /auth/v1/token?grant_type=password
+  is_control: true
+  occurred: naturally
+  verified_by: |
+    real account + wrong password -> {"code":400,"error_code":"invalid_credentials",
+                                      "msg":"Invalid login credentials"}
+    nonexistent account           -> byte-identical response
+    Compared as whole response bodies, not just status codes.
+  why_flagging_this_is_wrong: |
+    The responses are identical, so the endpoint leaks nothing about which
+    accounts exist. This sits directly beside auth-001 on the same endpoint:
+    that endpoint has a real authentication weakness and a correctly handled
+    one at the same time. A grader that reports "user enumeration via login"
+    because it found a login weakness at all has pattern-matched on the
+    endpoint rather than tested the behaviour.
+    Note profiles ARE a public directory by design (ctl-002), so usernames are
+    enumerable there — but that is a deliberate product feature exposing no
+    email addresses, and it is not this.
 ```
 
 ---
@@ -917,7 +1020,7 @@ Findings only; controls excluded.
 |---|---|---|
 | `baas-direct` | 8 — rls-001, rls-002, rls-003, rls-004, storage-001, info-001, info-002, hdr-003 | 7 |
 | `bundle-mining` | 5 — key-001, key-002, admin-001, llm-001, llm-002 | 5 |
-| `static-crawl` | 2 — hdr-001, hdr-002 | 2 |
+| `static-crawl` | 4 — hdr-001, hdr-002, auth-001, auth-002 | 2 |
 | `authed-discovery` | 2 — authz-001, cookie-001 | 1 |
 | `path-probe` | 2 — probe-001, probe-002 | 2 |
 | `suffix-convention` | 1 — inj-001 | 1 |

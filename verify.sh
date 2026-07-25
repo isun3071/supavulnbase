@@ -22,6 +22,10 @@ pass=0; fail=0
 ok()   { printf "  \033[32mPASS\033[0m  %-11s %s\n" "$1" "$2"; pass=$((pass+1)); }
 bad()  { printf "  \033[31mFAIL\033[0m  %-11s %s\n" "$1" "$2"; fail=$((fail+1)); }
 check(){ [ "$2" = "$3" ] && ok "$1" "$4" || bad "$1" "$4 (got '$2', want '$3')"; }
+# Seed counts drift as soon as a grader registers accounts or writes rows, so
+# count assertions are lower bounds and the interesting properties are tested
+# as relationships instead of fixed numbers.
+ge(){ [ "${2:-0}" -ge "$3" ] 2>/dev/null && ok "$1" "$4" || bad "$1" "$4 (got '${2:-}', want >= $3)"; }
 
 jwt() { curl -s -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" \
         -H 'Content-Type: application/json' \
@@ -39,8 +43,8 @@ ADA=$(jwt ada)
 
 echo
 echo "== FINDINGS (must reproduce) =="
-check rls-001 "$(rows "$SB/rest/v1/projects?select=id")"  7 "projects readable anonymously"
-check rls-002 "$(rows "$SB/rest/v1/updates?select=id")"  13 "updates readable anonymously"
+ge rls-001 "$(rows "$SB/rest/v1/projects?select=id")"  7 "projects readable anonymously"
+ge rls-002 "$(rows "$SB/rest/v1/updates?select=id")"  13 "updates readable anonymously"
 
 AID=$(curl -s "$SB/rest/v1/profiles?select=id&username=eq.ada" -H "apikey: $ANON" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 c=$(code -X POST "$SB/rest/v1/projects" -H "apikey: $ANON" -H 'Content-Type: application/json' \
@@ -48,7 +52,10 @@ c=$(code -X POST "$SB/rest/v1/projects" -H "apikey: $ANON" -H 'Content-Type: app
 check rls-001w "$c" 201 "anonymous INSERT into projects"
 curl -s -o /dev/null -X DELETE "$SB/rest/v1/projects?slug=eq.verify-probe-tmp" -H "apikey: $SVC" -H "Authorization: Bearer $SVC"
 
-check rls-003 "$(rows "$SB/rest/v1/sponsor_leads?select=id" "$ADA")" 6 "permissive policy: ada reads all 6 leads"
+vis=$(rows "$SB/rest/v1/sponsor_leads?select=id" "$ADA")
+own=$(rows "$SB/rest/v1/sponsor_leads?select=id&user_id=eq.$AID" "$ADA")
+[ "$vis" -gt "$own" ] && ok rls-003 "permissive policy: ada sees $vis leads but owns only $own" \
+                      || bad rls-003 "ada sees $vis leads, owns $own — cross-user read gone"
 check rls-003a "$(rows "$SB/rest/v1/sponsor_leads?select=id")"       0 "...but not anonymously"
 
 c=$(code -X POST "$SB/rest/v1/drafts" -H "apikey: $ANON" -H 'Content-Type: application/json' \
@@ -65,6 +72,26 @@ check inj-001 "$n" 7 "filter injection returns all rows for a non-matching term"
 
 curl -s -X POST "$APP/api/feedback" -H 'Content-Type: application/json' -d '{}' | grep -q renderTemplate \
   && ok tmpl-001 "empty POST leaks the body-only field name" || bad tmpl-001 "renderTemplate not in the Zod error"
+
+# auth-001 vs ctl-014: login is unlimited, but other GoTrue endpoints are not
+login_codes=$(for i in $(seq 1 25); do curl -s -o /dev/null -w '%{http_code} ' \
+  -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" -H 'Content-Type: application/json' \
+  -d '{"email":"ada.demo@buildlog.test","password":"wrong"}'; done)
+n429=$(echo "$login_codes" | tr ' ' '\n' | grep -c '^429$')
+check auth-001 "$n429" 0 "25 failed logins, zero 429 — no rate limit on the password grant"
+check auth-001b "$(code -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" \
+  -H 'Content-Type: application/json' -d '{"email":"ada.demo@buildlog.test","password":"demo-password-123"}')" \
+  200 "...and no lockout: the account still authenticates afterwards"
+
+rec=$(for i in 1 2 3; do curl -s -o /dev/null -w '%{http_code} ' -X POST "$SB/auth/v1/recover" \
+  -H "apikey: $ANON" -H 'Content-Type: application/json' -d '{"email":"ada.demo@buildlog.test"}'; done)
+echo "$rec" | grep -q 429 && ok ctl-014 "/auth/v1/recover IS rate limited ($rec) — auth is not uniformly unlimited" \
+                          || bad ctl-014 "/auth/v1/recover no longer rate limits ($rec)"
+
+e1=$(curl -s -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" -H 'Content-Type: application/json' -d '{"email":"ada.demo@buildlog.test","password":"nope"}')
+e2=$(curl -s -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" -H 'Content-Type: application/json' -d '{"email":"definitely-no-such-user@buildlog.test","password":"nope"}')
+[ "$e1" = "$e2" ] && ok ctl-015 "login errors identical for real and unknown accounts (no enumeration)" \
+                  || bad ctl-015 "login response differs by account existence — enumeration possible"
 
 check probe-001 "$(code "$APP/.env")"        200 "deployment .env served under the APP root"
 check probe-002 "$(code "$APP/.git/config")" 200 ".git/config served under the APP root"
@@ -97,12 +124,15 @@ rm -rf "$B"
 
 echo
 echo "== CONTROLS (must stay quiet) =="
-check ctl-002 "$(rows "$SB/rest/v1/profiles?select=id")" 4 "profiles readable (public directory, intended)"
+ge ctl-002 "$(rows "$SB/rest/v1/profiles?select=id")" 4 "profiles readable (public directory, intended)"
 curl -s -o /dev/null -X PATCH "$SB/rest/v1/profiles?username=eq.grace" -H "apikey: $ANON" -H 'Content-Type: application/json' -d '{"bio":"VERIFY TAMPER"}'
 curl -s "$SB/rest/v1/profiles?select=bio&username=eq.grace" -H "apikey: $ANON" | grep -q 'VERIFY TAMPER' \
   && bad ctl-002 "anonymous profile write PERSISTED - RLS broken" || ok ctl-002 "anon profile write changed nothing (204 lies)"
 
-check ctl-009 "$(rows "$SB/rest/v1/payout_accounts?select=id" "$ADA")" 1 "ada sees only her own payout account"
+pvis=$(rows "$SB/rest/v1/payout_accounts?select=id" "$ADA")
+pown=$(rows "$SB/rest/v1/payout_accounts?select=id&user_id=eq.$AID" "$ADA")
+[ "$pvis" = "$pown" ] && [ "$pvis" -ge 1 ] && ok ctl-009 "ada sees exactly her own payout accounts ($pvis)" \
+  || bad ctl-009 "ada sees $pvis payout accounts but owns $pown — owner scoping broken"
 check ctl-009a "$(rows "$SB/rest/v1/payout_accounts?select=id")"       0 "payout accounts invisible anonymously"
 check ctl-010 "$(code "$SB/storage/v1/object/public/payout-documents/ada/remittance-2026-06.txt")" 400 "private bucket denies anonymous read"
 
