@@ -7,6 +7,9 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# git does not track empty directories, so a fresh clone may arrive without
+# public/. The runner stage copies it unconditionally.
+RUN mkdir -p public
 
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY

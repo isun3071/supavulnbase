@@ -4,5 +4,8 @@ out/
 *.log
 .DS_Store
 
+# local Claude Code settings, not part of the fixture
+.claude/
+
 # .env is committed on purpose — it holds only local demo keys and the whole
 # point is that `docker compose up` needs zero manual setup. See SECURITY.md.

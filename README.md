@@ -87,4 +87,3 @@ would write it, with no security intent in either direction, and then audited by
 hand against the running stack. `MANIFEST.md` currently documents only the
 defects that occurred **naturally**. The deliberate discovery obstacles and the
 planted vulnerability/control pairs described in `CLAUDE.md` are not in yet.
-# supavulnbase
