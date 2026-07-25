@@ -2,11 +2,15 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import SignOutButton from '@/components/SignOutButton'
+import BuildInfo from '@/components/BuildInfo'
 import './globals.css'
 
 export const metadata: Metadata = {
   title: 'BuildLog',
   description: 'Build in public. One update at a time.',
+  alternates: {
+    types: { 'application/json': `${process.env.NEXT_PUBLIC_BASE_PATH ?? ''}/api/projects` },
+  },
 }
 
 async function Nav() {
@@ -56,7 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Nav />
         <main className="mx-auto max-w-4xl px-5 py-8">{children}</main>
         <footer className="mx-auto max-w-4xl px-5 py-10 text-xs text-[#484f58]">
-          BuildLog — a hackathon project. Demo data only.
+          BuildLog — a hackathon project. Demo data only. <BuildInfo />
         </footer>
       </body>
     </html>

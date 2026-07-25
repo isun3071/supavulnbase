@@ -82,8 +82,18 @@ web/                       the Next.js app
 
 ## Status
 
-This is the **generate-and-audit** pass. The app was written as a hackathon team
-would write it, with no security intent in either direction, and then audited by
-hand against the running stack. `MANIFEST.md` currently documents only the
-defects that occurred **naturally**. The deliberate discovery obstacles and the
-planted vulnerability/control pairs described in `CLAUDE.md` are not in yet.
+**Planting pass in progress.** 21 findings, 13 controls, all verified against
+the running stack.
+
+The app was first written as a hackathon team would write it, with no security
+intent in either direction, then audited by hand; that produced the naturally
+occurring half. Deliberate vulnerability/control pairs and discovery obstacles
+were planted on top. `MANIFEST.md` marks which is which and records how each was
+verified.
+
+Every discovery mechanism in `CLAUDE.md` now gates at least one finding
+reachable by no other path, so a miss tells you which reach capability is
+broken. Still outstanding: the `interaction`-gated route, anonymous-404
+`authed-discovery` routes, an XSS reflect/escape pair, `GET /__manifest`, the
+root-served variant, and the remaining UI-state and hygiene fixtures. See the
+end of `MANIFEST.md`.

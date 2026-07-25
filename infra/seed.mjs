@@ -143,6 +143,38 @@ const PROJECTS = {
   ],
 }
 
+// Sponsor pipeline + payout details. Every company, person, and number here is
+// invented. The emails are on the reserved .test TLD.
+const SPONSOR_LEADS = {
+  ada: [
+    { company: 'Northwind Tooling', contact_name: 'R. Palmer', contact_email: 'r.palmer@northwind.test', amount_cents: 250000, stage: 'contacted', notes: 'Wants a logo on the docs page. Waiting on their legal.' },
+    { company: 'Cobalt Systems', contact_name: 'J. Okafor', contact_email: 'j.okafor@cobalt.test', amount_cents: 500000, stage: 'negotiating', notes: 'Asked for exclusivity in the SSG category. Said no.' },
+  ],
+  grace: [
+    { company: 'Harbor Analytics', contact_name: 'M. Lindqvist', contact_email: 'm.lindqvist@harbor.test', amount_cents: 120000, stage: 'contacted', notes: 'Small but keen. Wants a case study.' },
+    { company: 'Drydock Cloud', contact_name: 'T. Abara', contact_email: 't.abara@drydock.test', amount_cents: 900000, stage: 'signed', notes: 'Signed for a year. Invoice sent 3rd.' },
+  ],
+  linus: [
+    { company: 'Fernwood Labs', contact_name: 'S. Ito', contact_email: 's.ito@fernwood.test', amount_cents: 75000, stage: 'cold', notes: 'No reply to two emails. Probably dead.' },
+  ],
+  margaret: [
+    { company: 'Ridgeline Test Co', contact_name: 'A. Bello', contact_email: 'a.bello@ridgeline.test', amount_cents: 400000, stage: 'negotiating', notes: 'Wants quarterly reporting. Reasonable.' },
+  ],
+}
+
+const PAYOUT_ACCOUNTS = {
+  ada: [{ label: 'Primary current account', account_last4: '4417', routing_hint: 'demo-bank-01', is_default: true }],
+  grace: [{ label: 'Business account', account_last4: '9082', routing_hint: 'demo-bank-02', is_default: true }],
+  linus: [{ label: 'Personal', account_last4: '3310', routing_hint: 'demo-bank-01', is_default: true }],
+  margaret: [{ label: 'LLC account', account_last4: '7725', routing_hint: 'demo-bank-03', is_default: true }],
+}
+
+const DRAFTS = {
+  ada: 'half-written day 4 post, do not publish yet — still deciding whether to admit the rewrite',
+  grace: 'draft: the YAML anchor rant, probably too angry to post',
+  margaret: 'draft: postmortem of the CI failure, needs numbers',
+}
+
 async function waitForApi() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -211,6 +243,64 @@ async function main() {
         })
       }
     }
+  }
+
+  // sponsor pipeline, payout details, and an unfinished draft per user
+  for (const [username, leads] of Object.entries(SPONSOR_LEADS)) {
+    await api('/rest/v1/sponsor_leads', {
+      method: 'POST',
+      body: JSON.stringify(leads.map((l) => ({ ...l, user_id: ids[username] }))),
+    })
+  }
+  console.log(`  sponsor leads seeded`)
+
+  for (const [username, accounts] of Object.entries(PAYOUT_ACCOUNTS)) {
+    await api('/rest/v1/payout_accounts', {
+      method: 'POST',
+      body: JSON.stringify(accounts.map((a) => ({ ...a, user_id: ids[username] }))),
+    })
+  }
+  console.log(`  payout accounts seeded`)
+
+  for (const [username, body] of Object.entries(DRAFTS)) {
+    await api('/rest/v1/drafts', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: ids[username], body }),
+    })
+  }
+  console.log(`  drafts seeded`)
+
+  // buckets. project-media is served publicly so the feed can show screenshots;
+  // payout-documents is private.
+  for (const [id, isPublic] of [['project-media', true], ['payout-documents', false]]) {
+    try {
+      await api('/storage/v1/bucket', {
+        method: 'POST',
+        body: JSON.stringify({ id, name: id, public: isPublic }),
+      })
+      console.log(`  bucket ${id} (public=${isPublic})`)
+    } catch (e) {
+      console.log(`  bucket ${id} already exists`)
+    }
+  }
+
+  // one file in each, so the buckets are not empty
+  const uploads = [
+    ['project-media', 'lampshade/screenshot.txt', 'SYNTHETIC placeholder for a project screenshot.'],
+    [
+      'payout-documents',
+      'ada/remittance-2026-06.txt',
+      'SYNTHETIC remittance advice. Not a real document.\n' +
+        'Account ending 4417. Amount 2500.00. Reference DEMO-0001.',
+    ],
+  ]
+  for (const [bucket, path, body] of uploads) {
+    const res = await fetch(`${URL}/storage/v1/object/${bucket}/${path}`, {
+      method: 'POST',
+      headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'text/plain' },
+      body,
+    })
+    console.log(`  upload ${bucket}/${path} -> ${res.status}`)
   }
 
   console.log('seed complete')

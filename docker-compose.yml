@@ -100,7 +100,9 @@ services:
             continue
           fi
           echo "==> applying $${v}"
-          $$PSQL -f "$$f"
+          # -1 wraps the file in a single transaction, so a failure part way
+          # through does not leave the schema half-migrated
+          $$PSQL -1 -f "$$f"
           $$PSQL -q -c "insert into supabase_migrations.schema_migrations (version) values ('$$v')"
         done
         echo "migrations complete"
@@ -239,6 +241,12 @@ services:
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
         NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
         NEXT_PUBLIC_SITE_URL: ${SITE_URL}
+        NEXT_PUBLIC_SUPABASE_SERVICE_KEY: ${NEXT_PUBLIC_SUPABASE_SERVICE_KEY}
+        NEXT_PUBLIC_FAKE_OPENAI_KEY: ${NEXT_PUBLIC_FAKE_OPENAI_KEY}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_OPENAI_ASSISTANT_ID: ${NEXT_PUBLIC_OPENAI_ASSISTANT_ID}
+        NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
+        NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
     restart: unless-stopped
     # Host networking so the browser and the Next.js server resolve the
     # Supabase URL identically, the way they would against supabase.co.

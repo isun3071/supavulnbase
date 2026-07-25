@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import NewProjectForm from '@/components/NewProjectForm'
+import SponsorSync from '@/components/SponsorSync'
+import DraftAssistant from '@/components/DraftAssistant'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -23,6 +25,11 @@ export default async function DashboardPage() {
           <p className="mt-1 text-sm text-[#8b949e]">{user!.email}</p>
         </div>
         <NewProjectForm />
+      </div>
+
+      <div className="mb-6 grid gap-3 sm:grid-cols-2">
+        <SponsorSync />
+        <DraftAssistant />
       </div>
 
       <div className="flex flex-col gap-3">

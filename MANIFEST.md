@@ -1,13 +1,22 @@
 # MANIFEST — ground truth
 
-**Status: DRAFT — generate-and-audit pass only.**
+**Status: planting pass in progress.** 21 findings, 13 controls.
 
-This file documents **only the defects that occurred naturally.** The app was
-written as a hackathon team would write it, with no security intent in either
-direction, and then audited by hand against the running stack. Nothing has been
-planted yet. The deliberate discovery obstacles and the vulnerability/control
-pairs described in `CLAUDE.md` are listed at the bottom under
+Entries above the `PLANTED` divider in each block occurred **naturally** — the
+app was written as a hackathon team would write it, with no security intent in
+either direction, then audited by hand. Entries below the divider were
+**planted deliberately**. Both halves were verified the same way, against the
+running stack. What is still outstanding is listed at the bottom under
 [Not yet present](#not-yet-present--to-be-planted).
+
+Two design decisions are recorded here because they shape the fixture:
+
+1. **The PostgREST OpenAPI root is deliberately left open** (info-001). It is
+   stock Supabase behaviour and a real finding in its own right. The
+   consequence is that the planted `schema-error` parameter had to be a
+   request-body-only field that is not a column anywhere — see tmpl-001.
+2. **The natural RLS distribution was kept** rather than re-rolled, so the
+   planted permissive policy and write gap sit on new tables beside it.
 
 Every entry below carries a `verified_by` field. Nothing here is asserted from
 reading code alone unless it says so. Three claims that looked true on
@@ -313,6 +322,276 @@ worse than no fixture.
   verified_by: 'GET /rest/v1/projects -> `Server: postgrest/12.2.0`'
   detection: Read the Server header.
   notes: Exact version, suitable for CVE lookup.
+
+################################################################
+# PLANTED — added in the planting pass
+################################################################
+
+- id: rls-003
+  name: Permissive RLS policy lets any signed-in user read every sponsor lead
+  category: broken-access-control
+  cwe: CWE-639
+  owasp_2025: A01
+  discovery_mechanism: baas-direct
+  reachable_by_other_means: false
+  location: table `public.sponsor_leads` via PostgREST
+  severity: critical
+  is_control: false
+  paired_control: ctl-009
+  verified_by: |
+    RLS is ON with four policies. The SELECT policy is
+    `using (auth.role() = 'authenticated')`.
+      anon (no session)      -> 0 rows
+      ada (authenticated)    -> 6 of 6 rows, though ada owns only 2
+    Ada reads other users' contact_email and amount_cents:
+      Drydock Cloud / t.abara@drydock.test / 900000  (grace's lead)
+      Fernwood Labs / s.ito@fernwood.test  / 75000   (linus's lead)
+  detection: |
+    Register an account, then query the table with that session:
+      curl "$SUPABASE/rest/v1/sponsor_leads?select=*" \
+        -H "apikey: $ANON_KEY" -H "Authorization: Bearer $USER_JWT"
+    Rows come back with user_id values other than your own.
+  notes: |
+    THE CASE A GENERATOR NEVER WRITES. RLS is enabled, four policies exist, and
+    three of them are correctly owner-scoped — only the SELECT policy is wrong.
+    `auth.role()` returns 'authenticated' for every logged-in user, so the
+    policy that looks like access control is really just "is anyone logged in".
+    No platform default catches this; a scanner that only checks whether RLS is
+    ON reports the table as protected. Note it is NOT reachable anonymously,
+    so a grader that never registers an account will miss it entirely.
+
+- id: rls-004
+  name: Unpoliced INSERT on drafts allows forging rows attributed to any user
+  category: broken-access-control
+  cwe: CWE-284
+  owasp_2025: A01
+  discovery_mechanism: baas-direct
+  reachable_by_other_means: false
+  location: table `public.drafts` via PostgREST
+  severity: high
+  is_control: false
+  paired_control: ctl-013
+  verified_by: |
+    SELECT is correctly owner-scoped; INSERT is `with check (true)`.
+      anon SELECT           -> 0 rows (reads are properly scoped)
+      ada  SELECT           -> 1 row  (own only)
+      anon INSERT with ada's user_id -> HTTP 201
+      ada then sees 2 drafts, the second being the anonymously forged row
+    Row removed after verification.
+  detection: |
+    POST /rest/v1/drafts with only the anon key and a user_id belonging to
+    someone else. The row is created and appears in that user's drafts.
+    A grader that only probes SELECT concludes this table is safe.
+  notes: |
+    This is the four-verb coverage test. Reads are scoped correctly, which is
+    exactly what makes it easy to miss.
+    IMPORTANT SCOPE CORRECTION: CLAUDE.md describes `rls_write_gap` as SELECT
+    scoped with INSERT, UPDATE and DELETE all unpoliced. That is not fully
+    realizable in PostgreSQL. UPDATE and DELETE must locate their target rows,
+    and that lookup is itself subject to the SELECT policy, so an owner-scoped
+    read policy silently neutralises open write policies. Verified directly:
+    `update public.drafts ... ` as anon reports `UPDATE 0`. The gap is
+    INSERT-only. See ctl-013, which turns the inert policies into a control.
+
+- id: storage-001
+  name: Public storage bucket serves files to anonymous callers
+  category: security-misconfiguration
+  cwe: CWE-732
+  owasp_2025: A01
+  discovery_mechanism: baas-direct
+  reachable_by_other_means: false
+  location: bucket `project-media` via /storage/v1/object/public/
+  severity: medium
+  is_control: false
+  paired_control: ctl-010
+  verified_by: |
+    storage.buckets: project-media public=true, payout-documents public=false
+    GET /storage/v1/object/public/project-media/lampshade/screenshot.txt
+      -> HTTP 200, body served with no apikey and no session
+  detection: |
+    List buckets or guess the object path; fetch it with no credentials.
+  notes: |
+    Paired with a correctly private bucket holding a synthetic remittance
+    document. A grader must distinguish the two rather than reporting
+    "storage is exposed".
+
+- id: key-001
+  name: service_role key shipped in the client bundle
+  category: sensitive-data-exposure
+  cwe: CWE-522
+  owasp_2025: A02
+  discovery_mechanism: bundle-mining
+  reachable_by_other_means: false
+  location: NEXT_PUBLIC_SUPABASE_SERVICE_KEY, used by src/components/SponsorSync.tsx
+  severity: critical
+  is_control: false
+  paired_control: ctl-001
+  verified_by: |
+    Built bundle pulled out of the running container:
+      service_role key -> present in 1 chunk
+      anon key         -> present in 7 chunks
+    Decoded payload of the leaked key: {"role":"service_role"}.
+    That key bypasses RLS entirely on every table.
+  detection: |
+    Extract long JWTs from the compiled JS, base64-decode the payload, and read
+    the `role` claim. One is `anon` (fine). One is `service_role` (total
+    compromise: it reads payout_accounts, every draft, every lead).
+  notes: |
+    THE CATASTROPHIC ONE, and the reason ctl-001 exists. Both keys are in the
+    same bundle, both begin `eyJ`, both are ~200 characters. Only the decoded
+    role claim separates a non-finding from a critical one. A grader that
+    reports both has a humiliating false positive; a grader that reports
+    neither has missed a total compromise; only a grader that decodes gets it
+    right. The `NEXT_PUBLIC_` prefix is what drags it into the bundle.
+
+- id: key-002
+  name: OpenAI-shaped API key shipped in the client bundle
+  category: sensitive-data-exposure
+  cwe: CWE-522
+  owasp_2025: A02
+  discovery_mechanism: bundle-mining
+  reachable_by_other_means: false
+  location: NEXT_PUBLIC_FAKE_OPENAI_KEY, sent as a Bearer token by DraftAssistant.tsx
+  severity: high
+  is_control: false
+  paired_control: ctl-011
+  verified_by: 'sk-proj- prefixed key present in 1 chunk of the built bundle.'
+  detection: Grep the bundle for `sk-proj-`.
+  notes: |
+    Format-valid, functionally dead. Sits beside four public identifiers that
+    are also in the bundle and must NOT be reported — see ctl-011.
+
+- id: admin-001
+  name: Unlinked admin export route dumps the whole workspace with no authorization
+  category: broken-access-control
+  cwe: CWE-306
+  owasp_2025: A01
+  discovery_mechanism: bundle-mining
+  reachable_by_other_means: false
+  location: GET /app/api/admin/export
+  severity: critical
+  is_control: false
+  paired_control: null
+  verified_by: |
+    GET /app/api/admin/export with no session and no apikey -> HTTP 200.
+    Response contains every sponsor_lead (6, including contact emails), every
+    payout_account (account_last4), every draft, and every profile.
+    The route runs a service-role client and checks nothing.
+    Not linked from any served HTML: the string 'admin' appears 0 times in the
+    markup of /app, /app/login and /app/signup. It appears in exactly 1 JS
+    chunk, as the EXPORT_ENDPOINT constant behind a console helper.
+  detection: |
+    Extract endpoint-shaped strings from the compiled JS. `/api/admin/export`
+    is there. Request it. No credential of any kind is required.
+  notes: |
+    Reachable only by mining the bundle. Crawling finds nothing; the route is
+    referenced by a `window.buildlogExport` console helper and never rendered.
+
+- id: llm-001
+  name: Full system prompt embedded as a string literal in the client bundle
+  category: information-disclosure
+  cwe: CWE-200
+  owasp_2025: A05
+  discovery_mechanism: bundle-mining
+  reachable_by_other_means: false
+  location: SYSTEM_PROMPT in src/components/DraftAssistant.tsx
+  severity: low
+  is_control: false
+  paired_control: null
+  verified_by: |
+    Present in 1 chunk, in plain English after minification:
+      "You are the BuildLog drafting assistant.\nYou help a maker turn rough
+       notes into a short daily build-log update.\nRules:\n- Write ..."
+  detection: Grep the bundle for prose. Minifiers rename identifiers but preserve string literals.
+  notes: |
+    In scope per CLAUDE.md: this is about where the prompt lives, not about
+    talking a model out of its instructions. No model persuasion is involved
+    and the endpoint it posts to is a local stub that calls nothing.
+
+- id: llm-002
+  name: Synthetic personal data interpolated into the client-side prompt
+  category: sensitive-data-exposure
+  cwe: CWE-359
+  owasp_2025: A02
+  discovery_mechanism: bundle-mining
+  reachable_by_other_means: false
+  location: DEMO_ACCOUNT in src/components/DraftAssistant.tsx
+  severity: medium
+  is_control: false
+  paired_control: null
+  verified_by: |
+    The prompt in the bundle carries name, email, phone, postal address, plan,
+    card last4 and a support PIN. Confirmed present in 1 chunk.
+  detection: Read the prompt string recovered from the bundle.
+  notes: |
+    EVERY VALUE IS SYNTHETIC and labelled as such in the source and in the data
+    itself ("SYNTHETIC TEST RECORD", 555-0100, example address). The finding is
+    the pattern — account data marshalled into a prompt that ships to the
+    browser — not the data.
+
+- id: inj-001
+  name: PostgREST filter injection in project search
+  category: injection
+  cwe: CWE-943
+  owasp_2025: A03
+  discovery_mechanism: suffix-convention
+  reachable_by_other_means: false
+  location: GET /app/api/projects/search?q=
+  severity: high
+  is_control: false
+  paired_control: ctl-012
+  verified_by: |
+    The handler concatenates: 'title.ilike.%' + q + '%,tagline.ilike.%' + q + '%'
+    and passes it to .or().
+      q=lamp                -> count 1
+      q=zzzznomatch         -> count 0
+      q=zzzznomatch%,id.not.is.null,title.ilike.%zzzznomatch
+                            -> count 7  (every row, for a term matching nothing)
+      q=x%,bogus_col.eq.1,title.ilike.%x
+                            -> 400 {"error":"column projects.bogus_col does not exist"}
+    The second case is a boolean oracle; the third enumerates columns.
+  detection: |
+    Find the collection at /api/projects (advertised in the page head as
+    rel="alternate"), then guess the /search suffix. Inject a comma to append
+    arbitrary PostgREST filter conditions.
+  notes: |
+    DISCOVERY IS THE POINT. The string "/api/projects/search" appears 0 times
+    in the compiled bundle — verified — and is linked from nothing. It is built
+    by concatenation and reachable only by guessing a conventional suffix off a
+    discovered collection. This is Supabase's characteristic injection shape:
+    not SQL, but the PostgREST filter grammar, which is what actually gets
+    concatenated in this stack.
+
+- id: tmpl-001
+  name: Attacker-controlled render template accepted from the request body
+  category: injection
+  cwe: CWE-1236
+  owasp_2025: A03
+  discovery_mechanism: schema-error
+  reachable_by_other_means: false
+  location: POST /app/api/feedback, field `renderTemplate`
+  severity: low
+  is_control: false
+  paired_control: null
+  verified_by: |
+    POST {} -> HTTP 400 with Zod issues naming all three required fields:
+      path:["message"], path:["rating"], path:["renderTemplate"]
+    The handler does `TEMPLATES[renderTemplate] ?? renderTemplate`, so an
+    unknown value is used as the template itself and its {rating} / {message}
+    placeholders are substituted and returned in the response.
+  detection: |
+    POST an empty body and read the field names out of the validation error.
+    Then supply an arbitrary string as renderTemplate.
+  notes: |
+    THE FIELD NAME IS THE FINDING. Per the decision recorded for info-001, the
+    OpenAPI root at /rest/v1/ is deliberately left open, so this parameter is a
+    request-body-only field that is NOT a column on any table. Verified: 0
+    columns in the public schema match, and it appears 0 times in the OpenAPI
+    spec. An empty POST is the only way to learn it exists.
+    Honest scoping: the impact is reflection of an attacker-controlled format
+    string in a JSON response. There is no eval and no template engine behind
+    it, so this is a low-severity finding whose value is the discovery path,
+    not the blast radius.
 ```
 
 ---
@@ -453,6 +732,107 @@ worse than no fixture.
   why_flagging_this_is_wrong: |
     No XSS sink occurred naturally. The reflect/escape pair called for in
     CLAUDE.md is not built yet.
+
+################################################################
+# PLANTED CONTROLS
+################################################################
+
+- id: ctl-009
+  name: payout_accounts has correct owner-scoped RLS on all four verbs
+  category: not-a-finding
+  discovery_mechanism: baas-direct
+  location: table `public.payout_accounts`
+  is_control: true
+  verified_by: |
+    RLS on, four policies, each `auth.uid() = user_id`.
+      anon SELECT -> 0 rows
+      ada  SELECT -> 1 row, her own ("Primary current account", 4417)
+    Ada cannot see the other three users' payout rows.
+  why_flagging_this_is_wrong: |
+    Direct pair for rls-003. It sits in the same migration, in the same schema,
+    holding more sensitive data than the table that IS broken. A grader that
+    finds the permissive policy on sponsor_leads and generalises to "this
+    project's RLS is broken" will wrongly flag the one table that is correct.
+
+- id: ctl-010
+  name: payout-documents is a correctly private bucket
+  category: not-a-finding
+  discovery_mechanism: baas-direct
+  is_control: true
+  verified_by: |
+    public=false. Anonymous GET of the object path returns HTTP 400, and the
+    object policies require auth.uid() = owner for both read and write.
+  why_flagging_this_is_wrong: |
+    Pair for storage-001. Storage is in use and one bucket IS wrongly public;
+    this one is not. Reporting "storage misconfigured" without naming the
+    bucket fails to distinguish them.
+
+- id: ctl-011
+  name: Four public client identifiers in the bundle that must not be reported
+  category: not-a-finding
+  discovery_mechanism: bundle-mining
+  is_control: true
+  verified_by: |
+    Each confirmed present in the built bundle, 1 chunk apiece:
+      pk_test_51QxRmD...   Stripe PUBLISHABLE key  (publishable by design)
+      asst_9kQpWvNr...     OpenAI assistant id     (an identifier, not a credential)
+      prj_8HkQmWvN...      Vercel project id       (public build metadata)
+      dpl_4TnQrMvW...      Vercel deployment id    (public build metadata)
+  why_flagging_this_is_wrong: |
+    All four are designed to be in the browser. Stripe's publishable key is
+    named "publishable"; the secret key is the one that matters and it is not
+    here. Assistant and Vercel ids are identifiers, not secrets.
+    These sit in the same bundle as key-002, a genuine `sk-proj-` key. A
+    detector keyed on "looks like a vendor token" fires five times and is right
+    once. Precision here is only measurable because the decoys are present.
+
+- id: ctl-012
+  name: Integration proxy route — no database anywhere in the path
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: GET/POST /app/api/integrations/ping
+  is_control: true
+  verified_by: |
+    30 calls: 16x200, 5x429, 9x500. Latency measured between 0.24s and 3.92s.
+    The 500 body is `{"error":"upstream_unavailable","detail":"connect
+    ETIMEDOUT: partner gateway did not respond in time","echo":{...}}`.
+    The request payload is reflected verbatim in `echo`, including
+    `' OR SLEEP(5)--`.
+    Source contains 0 supabase/database references.
+  why_flagging_this_is_wrong: |
+    THE SECOND MOST IMPORTANT CONTROL IN THIS REPOSITORY. This route emulates a
+    flaky third-party webhook. It has no database behind it, so no injection is
+    possible, yet it trips all three classic injection oracles at once:
+      - TIMING: responses vary 0.2s to 4s at random, so any time-based
+        blind-injection heuristic sees a "delay" on payloads containing SLEEP.
+      - ERROR STRINGS: intermittent 500s carrying connect/timeout language look
+        like a backend falling over under a malformed payload.
+      - REFLECTION: the payload is echoed back, which reflection-based
+        detectors read as the input reaching an interpreter.
+    Every one of those signals is a coincidence of the stub. A grader reporting
+    injection here is wrong, and this is a known, common false-positive class.
+
+- id: ctl-013
+  name: drafts UPDATE and DELETE policies read as open but are inert
+  category: not-a-finding
+  discovery_mechanism: source-review
+  location: policies "Autosave update" / "Autosave delete" on public.drafts
+  is_control: true
+  verified_by: |
+    Both policies are literally `using (true)`, which reads as wide open.
+    They are not exploitable, because the owner-scoped SELECT policy gates the
+    row lookup that UPDATE and DELETE must perform. Verified twice:
+      PostgREST: anon PATCH -> 204, body unchanged on re-read; anon DELETE ->
+                 204, row still present
+      raw SQL as role anon: `UPDATE 0`
+  why_flagging_this_is_wrong: |
+    Reading the migration, `for update using (true)` looks like a critical
+    write gap, and the TODO comment beside it invites that reading. It is not
+    reachable. A grader that reports UPDATE/DELETE here has reasoned from
+    source without verifying, and PostgREST's 204-on-zero-rows will appear to
+    confirm it. The genuine gap on this table is INSERT only — see rls-004.
+    This is the counterpart trap to ctl-002: there, 204 hid a correct denial;
+    here, permissive-looking SQL hides an unreachable one.
 ```
 
 ---
@@ -463,20 +843,36 @@ Findings only; controls excluded.
 
 | Mechanism | Findings requiring it | Reachable by **no** other path |
 |---|---|---|
-| `baas-direct` | 5 — rls-001, rls-002, info-001, info-002, hdr-003 | 4 |
+| `baas-direct` | 8 — rls-001, rls-002, rls-003, rls-004, storage-001, info-001, info-002, hdr-003 | 7 |
+| `bundle-mining` | 5 — key-001, key-002, admin-001, llm-001, llm-002 | 5 |
 | `static-crawl` | 2 — hdr-001, hdr-002 | 2 |
 | `authed-discovery` | 2 — authz-001, cookie-001 | 1 |
+| `suffix-convention` | 1 — inj-001 | 1 |
+| `schema-error` | 1 — tmpl-001 | 1 |
 | `interaction` | 1 — ui-001 | 1 |
 | `source-review` | 1 — err-001 | 1 |
-| `bundle-mining` | 0 | 0 |
-| `schema-error` | 0 | 0 |
-| `suffix-convention` | 0 | 0 |
 
-**The distribution is badly lopsided, which is the main structural result of
-this pass.** Half of everything sits behind `baas-direct`, and three of the seven
-mechanisms in the spec gate nothing at all. That is expected — those mechanisms
-exist to be *built*, not to occur — but it means the fixture currently cannot
-distinguish a grader that only knows how to hit PostgREST from a good one.
+Every mechanism in the spec now gates at least one finding reachable by no
+other path, so a miss is diagnostic rather than merely a lost point.
+
+Two mechanisms deserve note. `bundle-mining` went from 0 to 5 and is now the
+sharpest discriminator in the repository: four of its five findings are
+invisible to any crawler, and one of them (key-001) sits beside a control that
+is byte-for-byte the same shape. `interaction` still rests on a single naturally
+occurring finding and is the thinnest column — the click-gated route called for
+in CLAUDE.md is not built yet.
+
+Anonymous reach vs authenticated reach is also worth separating:
+
+| Reachable with | Findings |
+|---|---|
+| nothing but the anon key | rls-001, rls-002, rls-004, storage-001, info-001, info-002, hdr-003 |
+| **requires registering an account** | rls-003, authz-001, cookie-001, ui-001 |
+| requires reading the compiled JS | key-001, key-002, admin-001, llm-001, llm-002 |
+| requires guessing a path suffix | inj-001 |
+| requires POSTing an empty body | tmpl-001 |
+
+A grader that never registers misses four findings including a critical one.
 
 ### Reachable by more than one path — to narrow later
 
@@ -505,41 +901,30 @@ than assumed.
 
 ## Not yet present — to be planted
 
-None of the following occurred naturally, which is consistent with the premise
-in `CLAUDE.md`: a generator writes no policy rather than a bad one, and writes no
-paired controls or discovery obstacles at all.
+**Done in this pass:** `rls_permissive`, `rls_write_gap` (INSERT-only, see
+rls-004), public/private bucket pair, service_role in the bundle, unlinked admin
+route, system prompt and synthetic PII in the bundle, the `schema-error`
+parameter, the `suffix-convention` injection, the decoy-secret control set, and
+the proxy-route control.
 
-**Discovery obstacles — none exist yet.** Every finding above sits on a route
-that is either linked, guessable, or part of the standard Supabase API surface.
+**Still outstanding:**
 
-- `bundle-mining`: service_role key in the bundle (pairs with `ctl-001`);
-  unlinked `/api/admin/*` route; client-side system prompt as a string literal;
-  synthetic PII interpolated into that prompt
-- `schema-error`: a parameter discoverable only from a Zod validation error —
-  **must not be a table column**, see `info-001`
-- `suffix-convention`: `/api/products/search?q=` style SQL injection built by
-  string concatenation, off a discovered collection
-- `interaction`: a route that exists only after a client-side click
-- `authed-discovery`: routes that 404 when anonymous; the `Secure` vs non-`Secure`
-  cookie pair that exposes the plain-HTTP session bug
-- `baas-direct`: `rls_permissive` (`using (auth.role() = 'authenticated')`);
-  `rls_write_gap` (SELECT scoped, INSERT/UPDATE/DELETE unpoliced); a public
-  storage bucket beside a correctly private one
-
-**Missing controls:**
-
-- the proxy route with no database in the path — intermittent 500s, 429s, and
-  multi-second latency, to catch injection oracles keying on timing or error
-  strings. Second most important control in the spec and entirely absent.
-- decoy secrets that must not fire: Stripe `pk_test_`, assistant `asst_`,
-  Vercel `prj_`/`dpl_`, beside a real-shaped `sk-proj-` that must
-- an endpoint that escapes correctly, beside one that does not
-
-**Missing infrastructure:**
-
-- `GET /__manifest` — the HTTP-served copy of this file
-- the root-served variant, as a second target for comparison
+- `interaction`: a route that exists only after a client-side click, present in
+  no server-rendered markup and in no bundle string. The `interaction` column
+  currently rests on ui-001 alone.
+- `authed-discovery`: routes that 404 when anonymous rather than redirecting;
+  the `Secure` vs non-`Secure` cookie pair that exposes the plain-HTTP session
+  bug. CLAUDE.md asks for a real finding behind at least two such routes.
+- an endpoint that reflects stored input unescaped, beside a sibling that
+  escapes correctly. No XSS sink exists at all right now (ctl-008).
+- `GET /__manifest` — the HTTP-served copy of this file, so a grader can fetch
+  the answer key programmatically.
+- the root-served variant, as a second target for comparison. This is what makes
+  the `/.env`-against-the-origin probe bug visible; ctl-005 notes that today
+  both prefixes are clean, so a misresolving probe still passes by accident.
 - remaining UI-state-honesty fixtures: client-side route rendering an empty
-  shell on direct load, history hijack, served HTML referencing a 404ing chunk
-- remaining hygiene floor: soft 404s, mixed content, a second route group with
-  headers configured correctly to pair against `hdr-001`
+  shell on direct load, history hijack, served HTML referencing a 404ing chunk.
+  Note ctl-007: the "write succeeds, UI does not update" case must be planted
+  deliberately, because Next 15 refetches dynamic routes and it will not occur.
+- remaining hygiene floor: soft 404s, mixed content, and a second route group
+  with headers configured correctly to pair against hdr-001.
