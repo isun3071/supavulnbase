@@ -1,6 +1,10 @@
 # MANIFEST — ground truth
 
-**Status: planting pass in progress.** 21 findings, 13 controls.
+**Status: planting pass in progress.** 23 findings, 13 controls.
+
+Ground truth is also served over HTTP at **`GET {basePath}/__manifest`**
+(`http://localhost:8090/app/__manifest`). `verify.sh` asserts that the ids
+served there match the ids in this file, so the two cannot drift apart.
 
 Entries above the `PLANTED` divider in each block occurred **naturally** — the
 app was written as a hackathon team would write it, with no security intent in
@@ -592,6 +596,67 @@ worse than no fixture.
     string in a JSON response. There is no eval and no template engine behind
     it, so this is a low-severity finding whose value is the discovery path,
     not the blast radius.
+
+- id: probe-001
+  name: Deployment .env served under the app root
+  category: sensitive-data-exposure
+  cwe: CWE-538
+  owasp_2025: A05
+  discovery_mechanism: path-probe
+  reachable_by_other_means: false
+  location: GET http://localhost:8090/app/.env
+  severity: critical
+  is_control: false
+  paired_control: ctl-005
+  verified_by: |
+    GET /app/.env            -> 200, plain text
+    GET /.env  (origin root) -> 404
+    Body contains POSTGRES_PASSWORD, the full DATABASE_URL, SMTP_PASSWORD,
+    the service_role key, and JWT_SECRET. The JWT secret is the worst of them:
+    it signs the whole auth system, so it forges any user or role at will.
+  detection: |
+    Probe common config paths RELATIVE TO THE APP ROOT:
+      curl http://localhost:8090/app/.env
+    Probing http://localhost:8090/.env returns 404 and proves nothing.
+  notes: |
+    THIS IS THE FINDING THE SUBPATH DESIGN EXISTS TO CATCH, and the reason
+    CLAUDE.md's third design rule is not decorative.
+    A path-guessing probe that resolves candidates against the ORIGIN instead
+    of the app root requests /.env, gets 404, and reports the target clean —
+    while a critical secret leak sits one prefix away. Against any fixture
+    served at / that bug is invisible, because both resolutions coincide.
+    Here they do not, so the bug becomes measurable. It applies to every
+    user.github.io/project/ style deployment in the wild.
+    IMPLEMENTATION NOTE, for honesty: these paths are served by a rewrite in
+    next.config.mjs rather than by static files, because Next refuses to serve
+    dotfiles out of public/ (verified: it returns 400). What is being emulated
+    is a deployment whose webserver document root is the project directory —
+    shared hosting, a misconfigured nginx `root`, a cloned repo sitting above
+    the build. The observable behaviour is identical to that shape; only the
+    mechanism differs, and the mechanism is invisible to a grader.
+    Cross-check with the root-served variant on :8091, where the same file is
+    at /.env and /app/.env 404s. The difference between the two runs is the
+    diagnosis.
+
+- id: probe-002
+  name: Git config with an embedded credential served under the app root
+  category: sensitive-data-exposure
+  cwe: CWE-538
+  owasp_2025: A05
+  discovery_mechanism: path-probe
+  reachable_by_other_means: false
+  location: GET http://localhost:8090/app/.git/config
+  severity: high
+  is_control: false
+  paired_control: ctl-005
+  verified_by: |
+    GET /app/.git/config            -> 200
+    GET /.git/config (origin root)  -> 404
+    Remote URL embeds a synthetic ghp_ token.
+  detection: Probe /.git/config relative to the app root, not the origin.
+  notes: |
+    Same resolution trap as probe-001, second path so the behaviour is not a
+    one-off. The token is synthetic and inert.
 ```
 
 ---
@@ -678,21 +743,28 @@ worse than no fixture.
     `productionBrowserSourceMaps` is set. Nothing to report.
 
 - id: ctl-005
-  name: No .env, .git, or config file exposure at either origin root or app root
+  name: Config paths are NOT served at the origin root
   category: not-a-finding
-  discovery_mechanism: static-crawl
+  discovery_mechanism: path-probe
   is_control: true
   verified_by: |
-    Probed at BOTH http://localhost:8090/{path} and http://localhost:8090/app/{path}
-    for: .env, .git/config, package.json, next.config.mjs, robots.txt.
-    All 404 at both prefixes.
+    GET http://localhost:8090/.env         -> 404
+    GET http://localhost:8090/.git/config  -> 404
+    GET http://localhost:8090/app/package.json -> 404 (genuinely absent)
+    The first two return 200 under /app/ — see probe-001 and probe-002.
   why_flagging_this_is_wrong: |
-    Nothing is served. Note this is the control half of the subpath design: the
-    app is at /app, so a probe that resolves these paths against the origin root
-    is testing the wrong prefix. Right now both prefixes are clean, so a
-    misresolving probe still reports correctly here by accident. Making that bug
-    visible requires a file that exists under /app/ but not at /, which is
-    scheduled for the planting pass.
+    REVISED IN THE PLANTING PASS. This entry previously stated that nothing was
+    served at either prefix. That is no longer true, and the change is the
+    whole point of the subpath design.
+    A grader that probes only the origin root and reports "no exposed config
+    files" is not producing a true negative. It is producing a FALSE NEGATIVE
+    against probe-001, a critical leak that includes the JWT signing secret.
+    The origin root really is clean; the app root is not. Reporting clean is
+    only correct if the app root was probed too.
+    This is the sharpest instrumentation in the repository precisely because
+    the failure is silent: the probe gets a 404, the grader reports success,
+    and nothing in the output hints that the wrong prefix was tested. Compare
+    against the root-served variant on :8091 to confirm the diagnosis.
 
 - id: ctl-006
   name: Unknown routes return a real 404, not a soft 404
@@ -847,6 +919,7 @@ Findings only; controls excluded.
 | `bundle-mining` | 5 — key-001, key-002, admin-001, llm-001, llm-002 | 5 |
 | `static-crawl` | 2 — hdr-001, hdr-002 | 2 |
 | `authed-discovery` | 2 — authz-001, cookie-001 | 1 |
+| `path-probe` | 2 — probe-001, probe-002 | 2 |
 | `suffix-convention` | 1 — inj-001 | 1 |
 | `schema-error` | 1 — tmpl-001 | 1 |
 | `interaction` | 1 — ui-001 | 1 |
@@ -871,8 +944,14 @@ Anonymous reach vs authenticated reach is also worth separating:
 | requires reading the compiled JS | key-001, key-002, admin-001, llm-001, llm-002 |
 | requires guessing a path suffix | inj-001 |
 | requires POSTing an empty body | tmpl-001 |
+| **requires probing relative to the app root, not the origin** | probe-001, probe-002 |
 
 A grader that never registers misses four findings including a critical one.
+A grader that resolves path guesses against the origin misses two more,
+including probe-001, which leaks the JWT signing secret. `path-probe` is a
+mechanism added during the planting pass; CLAUDE.md's table does not name it,
+but the capability it tests — resolving candidate paths against the app root —
+is exactly what the third design rule exists to measure.
 
 ### Reachable by more than one path — to narrow later
 
@@ -904,8 +983,10 @@ than assumed.
 **Done in this pass:** `rls_permissive`, `rls_write_gap` (INSERT-only, see
 rls-004), public/private bucket pair, service_role in the bundle, unlinked admin
 route, system prompt and synthetic PII in the bundle, the `schema-error`
-parameter, the `suffix-convention` injection, the decoy-secret control set, and
-the proxy-route control.
+parameter, the `suffix-convention` injection, the decoy-secret control set, the
+proxy-route control, `GET {basePath}/__manifest`, the root-served comparison
+variant, and the `path-probe` pair that finally makes the subpath design
+measurable.
 
 **Still outstanding:**
 
@@ -917,11 +998,6 @@ the proxy-route control.
   bug. CLAUDE.md asks for a real finding behind at least two such routes.
 - an endpoint that reflects stored input unescaped, beside a sibling that
   escapes correctly. No XSS sink exists at all right now (ctl-008).
-- `GET /__manifest` — the HTTP-served copy of this file, so a grader can fetch
-  the answer key programmatically.
-- the root-served variant, as a second target for comparison. This is what makes
-  the `/.env`-against-the-origin probe bug visible; ctl-005 notes that today
-  both prefixes are clean, so a misresolving probe still passes by accident.
 - remaining UI-state-honesty fixtures: client-side route rendering an empty
   shell on direct load, history hijack, served HTML referencing a 404ing chunk.
   Note ctl-007: the "write succeeds, UI does not update" case must be planted

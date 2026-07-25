@@ -13,6 +13,7 @@ cd "$(dirname "$0")"
 
 APP=${APP:-http://localhost:8090/app}
 ORIGIN=${ORIGIN:-http://localhost:8090}
+ROOT_APP=${ROOT_APP:-http://localhost:8091}
 SB=${SB:-http://localhost:8055}
 ANON=$(grep '^ANON_KEY=' .env | cut -d= -f2-)
 SVC=$(grep '^SERVICE_ROLE_KEY=' .env | cut -d= -f2-)
@@ -65,6 +66,11 @@ check inj-001 "$n" 7 "filter injection returns all rows for a non-matching term"
 curl -s -X POST "$APP/api/feedback" -H 'Content-Type: application/json' -d '{}' | grep -q renderTemplate \
   && ok tmpl-001 "empty POST leaks the body-only field name" || bad tmpl-001 "renderTemplate not in the Zod error"
 
+check probe-001 "$(code "$APP/.env")"        200 "deployment .env served under the APP root"
+check probe-002 "$(code "$APP/.git/config")" 200 ".git/config served under the APP root"
+curl -s "$APP/.env" | grep -q 'JWT_SECRET' \
+  && ok probe-001b "leaked .env contains the JWT signing secret" || bad probe-001b "JWT_SECRET missing from leaked .env"
+
 hdrs=$(curl -sD - -o /dev/null "$APP" | tr 'A-Z' 'a-z')
 miss=0; for h in content-security-policy x-frame-options x-content-type-options referrer-policy; do
   echo "$hdrs" | grep -q "^$h:" && miss=$((miss+1)); done
@@ -106,10 +112,9 @@ curl -s "$SB/rest/v1/drafts?select=body" -H "apikey: $ANON" -H "Authorization: B
   && bad ctl-013 "drafts UPDATE was exploitable - write gap wider than documented" \
   || ok ctl-013 "drafts UPDATE policy is inert as documented"
 
-for p in .env .git/config package.json; do
-  a=$(code "$ORIGIN/$p"); b=$(code "$APP/$p")
-  [ "$a" = "404" ] && [ "$b" = "404" ] && ok ctl-005 "/$p not served at either prefix" || bad ctl-005 "/$p exposed (origin=$a app=$b)"
-done
+check ctl-005  "$(code "$ORIGIN/.env")"       404 "/.env 404s at the ORIGIN (origin-resolving probe finds nothing)"
+check ctl-005a "$(code "$ORIGIN/.git/config")" 404 "/.git/config 404s at the ORIGIN"
+check ctl-005b "$(code "$APP/package.json")"   404 "package.json genuinely not served under the app root"
 check ctl-006 "$(code "$APP/definitely-not-a-real-page")" 404 "unknown route returns a real 404"
 
 # proxy control: no DB in the path, but flaky by design
@@ -120,9 +125,27 @@ n5=$(echo "$codes" | tr ' ' '\n' | grep -c '^500$'); n4=$(echo "$codes" | tr ' '
 check ctl-012b "$(grep -c 'supabase' web/src/app/api/integrations/ping/route.ts)" 0 "proxy route has no database in the path"
 
 echo
-echo "== NOT YET BUILT (expected to fail; see end of MANIFEST.md) =="
-m=$(code "$ORIGIN/__manifest"); [ "$m" = "200" ] && echo "  ready  __manifest  served" || echo "  todo   __manifest  not implemented (HTTP $m)"
-grep -rq 'dangerouslySetInnerHTML' web/src && echo "  ready  xss        sink present" || echo "  todo   xss        no reflect/escape pair exists"
+echo "== answer key served over HTTP =="
+check manifest "$(code "$APP/__manifest")" 200 "GET {basePath}/__manifest"
+served=$(curl -s "$APP/__manifest" | python3 -c "import sys,json;d=json.load(sys.stdin);print(' '.join(sorted([e['id'] for e in d['findings']+d['controls']])))" 2>/dev/null)
+doc=$(grep -oE '^- id: [a-z0-9-]+' MANIFEST.md | awk '{print $3}' | sort | tr '\n' ' ' | sed 's/ $//')
+[ "$served" = "$doc" ] && ok manifest "served ids match MANIFEST.md exactly" \
+  || bad manifest "DRIFT between /__manifest and MANIFEST.md"
+
+echo
+echo "== root-served comparison variant (profile: root-variant) =="
+if [ "$(code "$ROOT_APP/" )" = "200" ]; then
+  check variant "$(code "$ROOT_APP/.env")"  200 "/.env served at the ORIGIN of the root variant"
+  check variant "$(code "$ROOT_APP/app/.env")" 404 "...and NOT under /app there"
+  ok variant "a probe resolving against the origin finds probe-001 here but not on the primary target"
+else
+  echo "  skip   root variant not running (docker compose --profile root-variant up -d)"
+fi
+
+echo
+echo "== NOT YET BUILT (see end of MANIFEST.md) =="
+grep -rq 'dangerouslySetInnerHTML' web/src && echo "  ready  xss         sink present" || echo "  todo   xss         no reflect/escape pair exists"
+[ -d web/src/app/dashboard/insights ] && echo "  ready  interaction click-gated route present" || echo "  todo   interaction no click-gated route"
 
 echo
 echo "-------------------------------------------"

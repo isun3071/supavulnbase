@@ -262,6 +262,43 @@ services:
       NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
       NEXT_PUBLIC_SITE_URL: ${SITE_URL}
 
+  ##########################################################################
+  # Root-served comparison target. Same app, basePath="", different port.
+  # Not started by default:  docker compose --profile root-variant up -d
+  #
+  # Its only purpose is to expose probes that resolve /.env and /.git/config
+  # against the ORIGIN instead of the app root. Such a probe reports clean
+  # against the primary target and finds probe-001/probe-002 here. The
+  # difference between the two runs is the diagnosis.
+  ##########################################################################
+  web-root:
+    profiles: ["root-variant"]
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+        NEXT_PUBLIC_BASE_PATH: ""
+        NEXT_PUBLIC_SITE_URL: http://localhost:${APP_ROOT_PORT}
+        NEXT_PUBLIC_SUPABASE_SERVICE_KEY: ${NEXT_PUBLIC_SUPABASE_SERVICE_KEY}
+        NEXT_PUBLIC_FAKE_OPENAI_KEY: ${NEXT_PUBLIC_FAKE_OPENAI_KEY}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_OPENAI_ASSISTANT_ID: ${NEXT_PUBLIC_OPENAI_ASSISTANT_ID}
+        NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
+        NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      kong:
+        condition: service_healthy
+    environment:
+      HOSTNAME: 127.0.0.1
+      PORT: ${APP_ROOT_PORT}
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      NEXT_PUBLIC_BASE_PATH: ""
+      NEXT_PUBLIC_SITE_URL: http://localhost:${APP_ROOT_PORT}
+
 volumes:
   db-data:
   storage-data:

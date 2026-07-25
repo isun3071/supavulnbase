@@ -38,13 +38,35 @@ overlapping records, and builds and serves the app.
 | Surface | URL |
 |---|---|
 | App (**served under a subpath, not at the origin root**) | http://localhost:8090/app |
+| Ground truth, machine-readable | http://localhost:8090/app/\_\_manifest |
 | Supabase API gateway | http://localhost:8055 |
 | Postgres | `postgres://postgres:postgres@localhost:54322/postgres` |
+
+Check the target matches its answer key at any time:
+
+```bash
+./verify.sh          # 48 assertions; non-zero exit if anything drifted
+```
 
 `http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
 deliberate: path-guessing probes that resolve `/.env` against the origin instead
 of the app root pass every root-served fixture and report clean, and that bug is
 invisible unless the target is served under a subpath.
+
+That trap is live. `GET /app/.env` returns a deployment env file containing the
+JWT signing secret; `GET /.env` at the origin returns 404. A probe that resolves
+against the origin reports this target clean while a critical leak sits one
+prefix away.
+
+### The root-served comparison target
+
+```bash
+docker compose --profile root-variant up -d      # http://localhost:8091
+```
+
+Same app, `basePath` empty. There `/.env` is at the origin and `/app/.env` 404s —
+the exact inverse. Run a grader against both: if it finds the leak only on
+:8091, it resolves paths against the origin, and that is the diagnosis.
 
 Both API keys are in [`.env`](.env), committed on purpose so setup is zero-config.
 
@@ -82,8 +104,8 @@ web/                       the Next.js app
 
 ## Status
 
-**Planting pass in progress.** 21 findings, 13 controls, all verified against
-the running stack.
+**Planting pass in progress.** 23 findings, 13 controls, all verified against
+the running stack by `./verify.sh` (48 assertions, currently all passing).
 
 The app was first written as a hackathon team would write it, with no security
 intent in either direction, then audited by hand; that produced the naturally
@@ -93,7 +115,9 @@ verified.
 
 Every discovery mechanism in `CLAUDE.md` now gates at least one finding
 reachable by no other path, so a miss tells you which reach capability is
-broken. Still outstanding: the `interaction`-gated route, anonymous-404
-`authed-discovery` routes, an XSS reflect/escape pair, `GET /__manifest`, the
-root-served variant, and the remaining UI-state and hygiene fixtures. See the
-end of `MANIFEST.md`.
+broken.
+
+Still outstanding: the `interaction`-gated route, anonymous-404
+`authed-discovery` routes, an XSS reflect/escape pair, and the remaining
+UI-state and hygiene fixtures. None of these block a grader run — they are
+coverage gaps, not defects. See the end of `MANIFEST.md`.
