@@ -1,0 +1,259 @@
+name: supavulnbase
+
+# Everything binds to 127.0.0.1. Do not change this. See SECURITY.md.
+
+services:
+  ##########################################################################
+  # Postgres
+  ##########################################################################
+  db:
+    image: supabase/postgres:15.8.1.060
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT_HOST}:5432"
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY}
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # These sort AFTER the base image's own init scripts, which is where the
+      # supabase roles get created. Earlier names run before the roles exist.
+      - ./infra/db/98-jwt.sql:/docker-entrypoint-initdb.d/init-scripts/98-jwt.sql:ro
+      - ./infra/db/99-roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ##########################################################################
+  # GoTrue — auth. Owns the `auth` schema and migrates it on boot.
+  ##########################################################################
+  auth:
+    image: supabase/gotrue:v2.170.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${SUPABASE_PUBLIC_URL}
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: "*"
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP}
+
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM}
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: ${ENABLE_ANONYMOUS_USERS}
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+      GOTRUE_LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ##########################################################################
+  # App schema migrations. Plain SQL, applied in filename order.
+  ##########################################################################
+  migrate:
+    image: supabase/postgres:15.8.1.060
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        PSQL="psql -v ON_ERROR_STOP=1 -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U postgres -d ${POSTGRES_DB}"
+        $$PSQL -q -c "create schema if not exists supabase_migrations"
+        $$PSQL -q -c "create table if not exists supabase_migrations.schema_migrations (
+                        version text primary key, applied_at timestamptz not null default now())"
+        for f in /migrations/*.sql; do
+          v=$$(basename "$$f")
+          if [ "$$($$PSQL -tAc "select 1 from supabase_migrations.schema_migrations where version='$$v'")" = "1" ]; then
+            echo "==> skip $${v} (already applied)"
+            continue
+          fi
+          echo "==> applying $${v}"
+          $$PSQL -f "$$f"
+          $$PSQL -q -c "insert into supabase_migrations.schema_migrations (version) values ('$$v')"
+        done
+        echo "migrations complete"
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+    restart: "no"
+
+  ##########################################################################
+  # PostgREST
+  ##########################################################################
+  rest:
+    image: postgrest/postgrest:v12.2.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      PGRST_DB_SCHEMAS: public,storage
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY}
+    command: ["postgrest"]
+
+  ##########################################################################
+  # Storage
+  ##########################################################################
+  imgproxy:
+    image: darthsim/imgproxy:v3.8.0
+    restart: unless-stopped
+    environment:
+      IMGPROXY_BIND: ":5001"
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /
+      IMGPROXY_USE_ETAG: "true"
+      IMGPROXY_ENABLE_WEBP_DETECTION: "true"
+    volumes:
+      - storage-data:/var/lib/storage:z
+
+  storage:
+    image: supabase/storage-api:v1.19.3
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+      imgproxy:
+        condition: service_started
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: http://imgproxy:5001
+    volumes:
+      - storage-data:/var/lib/storage:z
+    healthcheck:
+      # 127.0.0.1, not localhost: localhost resolves to ::1 in this image and
+      # the server only binds IPv4.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://127.0.0.1:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ##########################################################################
+  # Kong — the Supabase API gateway. This is the `apikey` boundary.
+  ##########################################################################
+  kong:
+    image: kong:2.8.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SUPABASE_PORT}:8000/tcp"
+    depends_on:
+      auth:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+    volumes:
+      - ./infra/kong.yml:/home/kong/temp.yml:ro
+    entrypoint: >
+      bash -c 'eval "echo \"$$(cat ~/temp.yml)\"" > /home/kong/kong.yml
+      && /docker-entrypoint.sh kong docker-start'
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ##########################################################################
+  # Seed data. Creates demo users via the GoTrue admin API, then their rows.
+  ##########################################################################
+  seed:
+    image: node:22-alpine
+    depends_on:
+      kong:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      SUPABASE_URL: http://kong:8000
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+    volumes:
+      - ./infra/seed.mjs:/seed.mjs:ro
+    command: ["node", "/seed.mjs"]
+    restart: "no"
+
+  ##########################################################################
+  # The app. Served under ${APP_BASE_PATH}, not at the origin root.
+  ##########################################################################
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+        NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
+        NEXT_PUBLIC_SITE_URL: ${SITE_URL}
+    restart: unless-stopped
+    # Host networking so the browser and the Next.js server resolve the
+    # Supabase URL identically, the way they would against supabase.co.
+    network_mode: host
+    depends_on:
+      kong:
+        condition: service_healthy
+    environment:
+      HOSTNAME: 127.0.0.1
+      PORT: ${APP_PORT}
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
+      NEXT_PUBLIC_SITE_URL: ${SITE_URL}
+
+volumes:
+  db-data:
+  storage-data:
