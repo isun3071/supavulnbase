@@ -45,7 +45,7 @@ overlapping records, and builds and serves the app.
 Check the target matches its answer key at any time:
 
 ```bash
-./verify.sh          # 66 assertions (75 with PERF_MODE=on); non-zero on drift
+./verify.sh          # 76 assertions (85 with PERF_MODE=on); non-zero on drift
 ```
 
 `http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
@@ -171,9 +171,9 @@ web/                       the Next.js app
 
 ## Status
 
-**Passes A and B complete.** Manifest `0.5.0` — 39 findings, 25 controls
+**Passes A and B complete, coverage gaps closed.** Manifest `0.6.0` — 42 findings, 27 controls
 declared across all modes, all verified against the running stack by
-`./verify.sh` (66 assertions canonical, 75 with `PERF_MODE=on`) and
+`./verify.sh` (76 assertions canonical, 85 with `PERF_MODE=on`) and
 `./dial-sweep.sh`.
 
 Alongside the security set there are now **UI-state honesty** fixtures at
@@ -198,6 +198,11 @@ broken.
 The `interaction` mechanism is now gated by the discovery dial rather than
 resting on one naturally occurring finding.
 
-Still outstanding: anonymous-404 `authed-discovery` routes and an XSS
-reflect/escape pair. Neither blocks a grader run — they are coverage gaps, not
-defects. See the end of `MANIFEST.md`.
+The last two coverage gaps are closed. `/app/team` and `/app/team/audit`
+return **404 when anonymous** rather than redirecting, so they are discoverable
+only by carrying a session into the crawl, and each has a real finding behind
+it. `/app/p/{slug}/rich` renders a stored description as raw HTML while
+`/app/p/{slug}/plain` escapes the same field — a stored-XSS pair whose write
+path is the already-open `projects` table.
+
+Next up is the hardened reference build.

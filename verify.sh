@@ -226,6 +226,34 @@ else
 fi
 
 echo
+echo "== authed-discovery: anon-404 routes =="
+SESS=$(curl -s -X POST "$SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"ada.demo@buildlog.test","password":"demo-password-123"}')
+CK="sb-localhost-auth-token=base64-$(printf '%s' "$SESS" | base64 -w0)"
+check authz-002 "$(code "$APP/team")"       404 "/team 404s when anonymous (not a redirect, which would confirm it exists)"
+check authz-003 "$(code "$APP/team/audit")" 404 "/team/audit 404s when anonymous"
+check authz-002b "$(code "$APP/team" --cookie "$CK")"       200 "/team renders with a session"
+check authz-003b "$(code "$APP/team/audit" --cookie "$CK")" 200 "/team/audit renders with a session"
+n=$(curl -s "$APP/team" --cookie "$CK" | grep -o '@buildlog.test' | wc -l | tr -d ' ')
+[ "$n" -ge 4 ] && ok authz-002c "member directory leaks $n account emails to a signed-in user" \
+               || bad authz-002c "expected emails in the directory, found $n"
+check authz-003c "$(code -X POST "$SB/rest/v1/rpc/recent_auth_events" -H "apikey: $ANON" -H 'Content-Type: application/json' -d '{}')" 401 \
+  "audit RPC denied to anon, so PostgREST is not a second path"
+
+echo
+echo "== XSS pair =="
+check xss-001  "$(curl -s "$APP/p/lampshade/rich"  | grep -c 'data-html-probe')" 1 "/rich renders stored HTML as markup"
+check ctl-xss-001 "$(curl -s "$APP/p/lampshade/plain" | grep -c '&lt;span data-html-probe')" 1 "/plain escapes the same stored field"
+
+echo
+echo "== cookie diagnostic (measures the CLIENT, not the target) =="
+sec=$(curl -sD - -o /dev/null -X POST "$APP/api/session/secure-flag" | grep -ic 'set-cookie:.*secure')
+pln=$(curl -sD - -o /dev/null -X POST "$APP/api/session/plain-flag" | grep -c -i 'set-cookie: bl_plain')
+check ctl-cookie-001 "$sec" 1 "secure-flag sets a cookie carrying the Secure attribute"
+check ctl-cookie-001b "$pln" 1 "plain-flag sets the same cookie without it"
+
+echo
 echo "== UI-state honesty (defect / control pairs) =="
 check ui-006  "$(code "$APP/_next/static/chunks/analytics.7f3a91c4.js")" 404 "ui-006 referenced chunk 404s"
 check ctl-qa-005 "$(code "$APP/qa/present.js")" 200 "ctl-qa-005 referenced script resolves"

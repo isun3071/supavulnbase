@@ -52,8 +52,12 @@ const PROJECTS = {
       title: 'Lampshade',
       slug: 'lampshade',
       tagline: 'A tiny static site generator that fits in one file.',
+      // The <span> is inert and deliberate: it makes the xss-001 sink
+      // observable by inspection (it renders as an element on /p/{slug}/rich
+      // and as literal text on /p/{slug}/plain) without seeding an actual
+      // attack payload. Exploiting it still requires writing via rls-001.
       description:
-        'Started this because every SSG I tried needed a config file longer than the site. Lampshade reads a folder of markdown and writes a folder of html. That is the whole feature list.',
+        'Started this because every SSG I tried needed a config file longer than the site. Lampshade reads a folder of markdown and writes a folder of html. <span data-html-probe="1">That is the whole feature list.</span>',
       status: 'building',
       repo_url: 'https://github.example.test/ada/lampshade',
       updates: [

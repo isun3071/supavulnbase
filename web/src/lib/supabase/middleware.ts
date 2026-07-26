@@ -36,6 +36,13 @@ export async function updateSession(request: NextRequest) {
     return new NextResponse(null, { status: 404 })
   }
 
+  // authz-002 / authz-003: the team area 404s when anonymous instead of
+  // redirecting. A redirect confirms a route exists; a 404 does not, so these
+  // are crawlable only with a session carried into the crawl.
+  if (request.nextUrl.pathname.startsWith('/team') && !user) {
+    return new NextResponse(null, { status: 404 })
+  }
+
   const needsAuth =
     request.nextUrl.pathname.startsWith('/dashboard') ||
     request.nextUrl.pathname.startsWith('/settings')

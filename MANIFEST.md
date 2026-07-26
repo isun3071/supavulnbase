@@ -1,13 +1,13 @@
 # MANIFEST — ground truth
 
 ```
-version: 0.5.0
+version: 0.6.0
 ```
 
 **Cite this version and both dial settings with any published score, or the
 number is not reproducible.** `/__manifest` returns all three.
 
-**Status: passes A and B complete.** 39 findings, 25 controls declared across
+**Status: passes A and B complete, plus coverage gaps closed.** 42 findings, 27 controls declared across
 all modes; `/__manifest` reports how many are present in the current one.
 
 ## Modes
@@ -871,6 +871,106 @@ has been checked, not everything that is true.
     say about a request body field.
     The same route is also ctl-017, the second proxy false-positive control.
 
+- id: authz-002
+  name: Member directory exposes every account email to any registered user
+  category: information-disclosure
+  cwe: CWE-359
+  owasp_2025: A01
+  discovery_mechanism: authed-discovery
+  reachable_by_other_means: false
+  location: GET {basePath}/team
+  severity: high
+  is_control: false
+  paired_control: null
+  occurred: planted
+  verified_by: |
+    anonymous  GET /team -> 404
+    with a session -> 200, listing 8 accounts with their email addresses and
+    last sign-in times.
+  detection: |
+    Register or log in, then crawl WITH that session. An anonymous crawl finds
+    nothing here at all.
+  notes: |
+    404, NOT A REDIRECT, AND THAT IS THE POINT. /dashboard and /settings redirect
+    to /login when anonymous, which confirms they exist — a crawler learns the
+    route is there and can come back with credentials. This route returns 404,
+    so it is indistinguishable from a path that was never implemented. Only a
+    grader that carries a session INTO THE CRAWL, rather than merely into its
+    probes, ever sees it.
+    The data is genuinely new. Email addresses live in auth.users and appear
+    nowhere else in this fixture: public.profiles carries username, display name
+    and bio only, and admin-001's export contains no emails (verified: 0
+    occurrences). So this is not a restatement of another entry.
+
+- id: authz-003
+  name: Activity feed exposes account authentication history
+  category: information-disclosure
+  cwe: CWE-200
+  owasp_2025: A01
+  discovery_mechanism: authed-discovery
+  reachable_by_other_means: false
+  location: GET {basePath}/team/audit
+  severity: medium
+  is_control: false
+  paired_control: null
+  occurred: planted
+  verified_by: |
+    anonymous -> 404; with a session -> 200.
+    Renders GoTrue audit events: sign-ins, signups and password-recovery
+    requests, each keyed by the acting account's email. 10 email occurrences on
+    the page in a freshly seeded stack.
+    The backing function is granted to service_role only:
+      anon POST /rest/v1/rpc/recent_auth_events -> 401
+  detection: Carry a session into the crawl and read the feed.
+  notes: |
+    The second finding behind authed-discovery, as CLAUDE.md asks for. It
+    reveals who is active, when, and which accounts have requested a password
+    reset — useful for targeting before an attempt on auth-001, which has no
+    rate limiting.
+    NO IP ADDRESSES, DELIBERATELY. The first build of this route surfaced an
+    ip_address column. auth.audit_log_entries.ip_address is empty in this
+    configuration and the payload carries no remote_addr, so the column was
+    always blank and the manifest claim would have been false. It was removed
+    rather than left as an unbacked claim.
+    The RPC is granted to service_role only so PostgREST cannot be a second path
+    to the same data — a finding reachable two ways teaches half as much.
+
+- id: xss-001
+  name: Stored XSS via unescaped project description
+  category: injection
+  cwe: CWE-79
+  owasp_2025: A03
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: GET {basePath}/p/{slug}/rich
+  severity: high
+  is_control: false
+  paired_control: ctl-xss-001
+  occurred: planted
+  verified_by: |
+    Full chain, end to end:
+      1. anon PATCH /rest/v1/projects?slug=eq.nightjar with the anon key only,
+         setting description to `pwn <img src=x onerror=alert(document.domain)>`
+         -> HTTP 204 (this is rls-001; projects has no RLS)
+      2. GET /p/nightjar/rich -> the payload is present in the served HTML
+         unescaped: <img src=x onerror=alert(document.domain)>
+      3. GET /p/nightjar/plain -> the same stored value arrives escaped:
+         &lt;img src=x onerror=...
+    Data restored after verification.
+  detection: |
+    Either inspect the seeded description, which contains an inert
+    <span data-html-probe="1"> that renders as an element here and as literal
+    text on the sibling route, or store a payload via the open write path and
+    load this page.
+  notes: |
+    STORED, and the write path is already part of the fixture: because
+    public.projects has no RLS, an ANONYMOUS caller can plant the payload and it
+    then executes for every visitor. That chain — unauthenticated write into a
+    rendered sink — is the realistic shape on this stack.
+    The seeded inert span exists so the sink is observable by inspection alone,
+    without a grader having to write first. Exploitation still requires the
+    write.
+
 ################################################################
 # UI-STATE HONESTY — Pass B
 #
@@ -1513,6 +1613,51 @@ has been checked, not everything that is true.
     intermittent upstream error strings, and full payload reflection — with no
     interpreter and no database anywhere behind it. Any injection reported here
     is a false positive.
+
+- id: ctl-xss-001
+  name: Sibling route renders the same stored field escaped
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: GET {basePath}/p/{slug}/plain
+  is_control: true
+  occurred: planted
+  verified_by: |
+    With a live payload stored in the row, /rich served
+    `<img src=x onerror=alert(document.domain)>` raw while /plain served
+    `&lt;img src=x onerror=...`. Same row, same column, same request.
+  why_flagging_this_is_wrong: |
+    Direct pair for xss-001, and the strictest kind: the CONTENT is identical
+    because both routes read the same stored field from the same row. Only the
+    sink differs — dangerouslySetInnerHTML on one, JSX interpolation on the
+    other. A grader reporting XSS here has flagged the presence of
+    attacker-controlled content rather than an injection.
+    See also ctl-008, which was NARROWED when this pair was planted: the main
+    application pages still escape correctly, and reporting XSS against the feed
+    or the standard project page is still a false positive.
+
+- id: ctl-cookie-001
+  name: Secure and non-Secure cookie pair (client diagnostic)
+  category: not-a-finding
+  discovery_mechanism: authed-discovery
+  location: POST {basePath}/api/session/secure-flag and /plain-flag, read at /echo
+  is_control: true
+  occurred: planted
+  verified_by: |
+    /secure-flag sets `bl_secure` WITH the Secure attribute; /plain-flag sets
+    `bl_plain` without it. /echo reports which of the two came back.
+  why_flagging_this_is_wrong: |
+    A DIAGNOSTIC, NOT A VULNERABILITY, and it measures the CLIENT rather than
+    the target. CLAUDE.md asks for it because a Secure cookie stored but never
+    transmitted over http is a real grader bug that otherwise presents as the
+    target's fault.
+    Over plain http the correct browser-equivalent result is bl_plain present
+    and bl_secure absent. A client returning BOTH transmits Secure cookies over
+    an insecure channel. A client returning NEITHER is dropping cookies
+    entirely, which invalidates every authed-discovery result it produces —
+    worth knowing before trusting a score.
+    The absent Secure attribute on the real session cookie is already recorded
+    as cookie-001, and it is REQUIRED for this fixture to work over http, so
+    reporting these two endpoints as a finding is wrong.
 
 - id: ctl-qa-001
   name: Create invalidates and the list updates
