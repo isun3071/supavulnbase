@@ -1,9 +1,11 @@
+import { hardened } from '@/lib/harden'
 // PERF FIXTURE perf-003: excessive resource requests on the critical path.
 //
 // One 68-byte image, requested 60 times with a distinct cache-busting query
 // string each time, so nothing can be reused. Deterministic: the count is a
 // property of the served markup, not of the environment.
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
+// HARDENED(perf): drop the cache-busting so one request serves all of them.
 const N = 60
 
 export default function ManyRequestsPage() {
@@ -17,7 +19,7 @@ export default function ManyRequestsPage() {
         {Array.from({ length: N }, (_, i) => (
           <img
             key={i}
-            src={`${BASE}/perf/dot.png?v=${i}`}
+            src={hardened('perf') ? `${BASE}/perf/dot.png` : `${BASE}/perf/dot.png?v=${i}`}
             alt=""
             width={16}
             height={16}

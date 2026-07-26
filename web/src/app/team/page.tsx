@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { createClient } from '@supabase/supabase-js'
+import { hardened } from '@/lib/harden'
+import { adminClient } from '@/lib/admin'
 
 // Workspace member directory.
 //
@@ -14,15 +15,15 @@ import { createClient } from '@supabase/supabase-js'
 // this is a genuinely new disclosure, not a restatement of another entry.
 export const dynamic = 'force-dynamic'
 
-const admin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY!,
-  { auth: { persistSession: false } },
-)
 
 export default async function TeamPage() {
+  const admin = adminClient()
   const { data } = await admin.auth.admin.listUsers({ page: 1, perPage: 100 })
-  const users = data?.users ?? []
+  // HARDENED(authz): a member directory does not need to publish email
+  // addresses or sign-in times to every account holder.
+  const users = (data?.users ?? []).map((u) =>
+    hardened('authz') ? { ...u, email: undefined, last_sign_in_at: null } : u,
+  )
 
   return (
     <div>

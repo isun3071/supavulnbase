@@ -1,4 +1,5 @@
 import CreateList from '@/components/qa/CreateList'
+import { hardened } from '@/lib/harden'
 export const dynamic = 'force-dynamic'
 export default function StalePage() {
   return (
@@ -8,7 +9,8 @@ export default function StalePage() {
         Adding an item succeeds server-side, but this list never reflects it until you reload
         manually.
       </p>
-      <CreateList invalidate={false} initial={['Draft the README', 'Wire up the feed', 'Fix the slug collision']} />
+      {/* HARDENED(qa): invalidate after the write. */}
+      <CreateList invalidate={hardened('qa')} initial={['Draft the README', 'Wire up the feed', 'Fix the slug collision']} />
     </div>
   )
 }

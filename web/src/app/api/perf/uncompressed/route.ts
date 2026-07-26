@@ -1,3 +1,5 @@
+import { gzipSync } from 'zlib'
+import { hardened } from '@/lib/harden'
 // PERF FIXTURE perf-001: text payload served with no compression.
 //
 // Structural, not timing: whether a response is compressed is a deterministic
@@ -13,7 +15,19 @@ const BODY = Array.from(
     `${i}\tBuildLog changelog line ${i}: routine entry, highly repetitive text that would compress extremely well if anything were compressing it.`,
 ).join('\n')
 
-export async function GET() {
+export async function GET(request: Request) {
+  // HARDENED(perf): compress it.
+  if (hardened('perf') && (request.headers.get('accept-encoding') ?? '').includes('gzip')) {
+    return new Response(gzipSync(Buffer.from(BODY)), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Encoding': 'gzip',
+        'Vary': 'Accept-Encoding',
+        'Cache-Control': 'public, max-age=60',
+      },
+    })
+  }
   return new Response(BODY, {
     status: 200,
     headers: {

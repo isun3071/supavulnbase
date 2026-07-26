@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { hardened } from '@/lib/harden'
 
 // "Rich" project description — lets makers use a bit of markup in their write-up.
 //
@@ -29,10 +30,17 @@ export default async function RichProjectPage({ params }: { params: Promise<{ sl
       <h1 className="text-2xl font-bold">{project.title}</h1>
       <p className="mt-2 text-[#8b949e]">{project.tagline}</p>
 
-      <div
-        className="card mt-6 p-4 text-sm leading-relaxed"
-        dangerouslySetInnerHTML={{ __html: project.description ?? '' }}
-      />
+      {/* HARDENED(injection): the same field rendered through JSX, which escapes. */}
+      {hardened('injection') ? (
+        <div className="card mt-6 whitespace-pre-wrap p-4 text-sm leading-relaxed">
+          {project.description ?? ''}
+        </div>
+      ) : (
+        <div
+          className="card mt-6 p-4 text-sm leading-relaxed"
+          dangerouslySetInnerHTML={{ __html: project.description ?? '' }}
+        />
+      )}
 
       <p className="mt-6 text-sm">
         <Link href={`/p/${slug}/plain`} className="text-[#58a6ff] hover:underline">

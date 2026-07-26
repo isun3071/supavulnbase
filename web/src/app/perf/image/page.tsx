@@ -1,3 +1,4 @@
+import { hardened } from '@/lib/harden'
 // PERF FIXTURE perf-004: oversized image on the critical path.
 //
 // A 4MB PNG rendered above the fold at 320px wide, with no responsive sources
@@ -9,7 +10,7 @@ export default function OversizedImagePage() {
   return (
     <div>
       <img
-        src={`${BASE}/perf/hero-oversized.png`}
+        src={`${BASE}${hardened('perf') ? '/perf/dot.png' : '/perf/hero-oversized.png'}`}
         alt="Project hero"
         width={320}
         height={228}

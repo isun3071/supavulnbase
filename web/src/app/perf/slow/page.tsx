@@ -1,3 +1,4 @@
+import { hardened } from '@/lib/harden'
 // PERF FIXTURE perf-005: TTFB floor.
 //
 // The manifest claims "TTFB exceeds 3s by construction", NOT a measured number.
@@ -7,7 +8,8 @@
 export const dynamic = 'force-dynamic'
 
 export default async function SlowPage() {
-  await new Promise((r) => setTimeout(r, 3000))
+  // HARDENED(perf): remove the blocking sleep.
+  if (!hardened('perf')) await new Promise((r) => setTimeout(r, 3000))
   return (
     <div>
       <h1 className="text-2xl font-bold">Slow route</h1>

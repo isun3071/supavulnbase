@@ -268,6 +268,7 @@ services:
         NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
         NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
         NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+        NEXT_PUBLIC_HARDEN_CLASS: "none"
     restart: unless-stopped
     # Host networking so the browser and the Next.js server resolve the
     # Supabase URL identically, the way they would against supabase.co.
@@ -283,6 +284,7 @@ services:
       NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
       NEXT_PUBLIC_SITE_URL: ${SITE_URL}
       NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       RLS_MODE: ${RLS_MODE}
       PERF_MODE: ${PERF_MODE}
 
@@ -327,6 +329,280 @@ services:
       RLS_MODE: ${RLS_MODE}
       PERF_MODE: ${PERF_MODE}
 
+  ##########################################################################
+  # HARDENED REFERENCE — its own stack, on its own ports.
+  #
+  #   docker compose --profile hardened up -d
+  #
+  # It needs a separate database and a separate GoTrue because two of the flaw
+  # classes are not per-container properties: `rls` lives in Postgres policies
+  # and `auth` lives in GoTrue configuration. Sharing either with the vulnerable
+  # target would mean hardening one would silently harden the other.
+  #
+  # HARDEN_CLASS selects which single class is fixed, so the differential
+  # against :8090 is attributable to that class alone.
+  ##########################################################################
+  hardened-db:
+    profiles: ["hardened"]
+    image: supabase/postgres:15.8.1.060
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HARDENED_POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY}
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    volumes:
+      - hardened-db-data:/var/lib/postgresql/data
+      - ./infra/db/98-jwt.sql:/docker-entrypoint-initdb.d/init-scripts/98-jwt.sql:ro
+      - ./infra/db/99-roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hardened-auth:
+    profiles: ["hardened"]
+    image: supabase/gotrue:v2.170.0
+    restart: unless-stopped
+    depends_on:
+      hardened-db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://localhost:${HARDENED_SUPABASE_PORT}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@hardened-db:5432/${POSTGRES_DB}
+      GOTRUE_SITE_URL: http://localhost:${HARDENED_APP_PORT}/app
+      GOTRUE_URI_ALLOW_LIST: "*"
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP}
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM}
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+      GOTRUE_LOG_LEVEL: info
+      # HARDENED(auth): auth-001 and auth-002. The vulnerable stack leaves both
+      # at their defaults — no limit on the password grant, and a six-character
+      # minimum with no complexity requirement.
+      GOTRUE_SECURITY_MANUAL_LINKING_ENABLED: "false"
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: ${HARDENED_RATE_LIMIT}
+      GOTRUE_RATE_LIMIT_VERIFY: ${HARDENED_RATE_LIMIT}
+      GOTRUE_PASSWORD_MIN_LENGTH: ${HARDENED_PW_MIN_LENGTH}
+      GOTRUE_PASSWORD_REQUIRED_CHARACTERS: ${HARDENED_PW_REQUIRED_CHARS}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hardened-migrate:
+    profiles: ["hardened"]
+    image: supabase/postgres:15.8.1.060
+    depends_on:
+      hardened-db:
+        condition: service_healthy
+      hardened-auth:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      RLS_MODE: ${RLS_MODE}
+      HARDEN_CLASS: ${HARDEN_CLASS}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        PSQL="psql -v ON_ERROR_STOP=1 -h hardened-db -p 5432 -U postgres -d ${POSTGRES_DB}"
+        $$PSQL -q -c "create schema if not exists supabase_migrations"
+        $$PSQL -q -c "create table if not exists supabase_migrations.schema_migrations (
+                        version text primary key, applied_at timestamptz not null default now())"
+        for f in /migrations/*.sql; do
+          v=$$(basename "$$f")
+          if [ "$$($$PSQL -tAc "select 1 from supabase_migrations.schema_migrations where version='$$v'")" = "1" ]; then continue; fi
+          echo "==> applying $${v}"
+          $$PSQL -1 -f "$$f"
+          $$PSQL -q -c "insert into supabase_migrations.schema_migrations (version) values ('$$v')"
+        done
+        $$PSQL -1 -f /dials/rls/${RLS_MODE}.sql
+        # The hardening overlay is applied LAST and never recorded, so flipping
+        # HARDEN_CLASS takes effect on an existing volume.
+        if [ "${HARDEN_CLASS}" = "rls" ] || [ "${HARDEN_CLASS}" = "all" ]; then
+          echo "==> hardening class: rls"
+          $$PSQL -1 -f /harden/rls.sql
+        else
+          # The volume persists, so a previous rls/all run would otherwise leave
+          # this class hardened and the per-class diff would not be minimal.
+          echo "==> reverting rls to the vulnerable baseline (HARDEN_CLASS=${HARDEN_CLASS})"
+          $$PSQL -1 -f /harden/rls-revert.sql
+        fi
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+      - ./supabase/dials:/dials:ro
+      - ./supabase/harden:/harden:ro
+    restart: "no"
+
+  hardened-rest:
+    profiles: ["hardened"]
+    image: postgrest/postgrest:v12.2.0
+    restart: unless-stopped
+    depends_on:
+      hardened-db:
+        condition: service_healthy
+      hardened-migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@hardened-db:5432/${POSTGRES_DB}
+      PGRST_DB_SCHEMAS: public,storage
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    command: ["postgrest"]
+
+  hardened-storage:
+    profiles: ["hardened"]
+    image: supabase/storage-api:v1.19.3
+    restart: unless-stopped
+    depends_on:
+      hardened-db:
+        condition: service_healthy
+      hardened-rest:
+        condition: service_started
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://hardened-rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@hardened-db:5432/${POSTGRES_DB}
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    volumes:
+      - hardened-storage-data:/var/lib/storage:z
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://127.0.0.1:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hardened-kong:
+    profiles: ["hardened"]
+    image: kong:2.8.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HARDENED_SUPABASE_PORT}:8000/tcp"
+    depends_on:
+      hardened-auth:
+        condition: service_healthy
+      hardened-rest:
+        condition: service_started
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth,rate-limiting
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      HARDENED_RATE_LIMIT: ${HARDENED_RATE_LIMIT}
+    volumes:
+      - ./infra/kong.hardened.yml:/home/kong/temp.yml:ro
+    entrypoint: >
+      bash -c 'eval "echo \"$$(cat ~/temp.yml)\"" > /home/kong/kong.yml
+      && /docker-entrypoint.sh kong docker-start'
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  hardened-seed:
+    profiles: ["hardened"]
+    image: node:22-alpine
+    depends_on:
+      hardened-kong:
+        condition: service_healthy
+      hardened-migrate:
+        condition: service_completed_successfully
+      hardened-storage:
+        condition: service_healthy
+    environment:
+      SUPABASE_URL: http://hardened-kong:8000
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+    volumes:
+      - ./infra/seed.mjs:/seed.mjs:ro
+    command: ["node", "/seed.mjs"]
+    restart: "no"
+
+  hardened-harden-storage:
+    profiles: ["hardened"]
+    image: node:22-alpine
+    depends_on:
+      hardened-seed:
+        condition: service_completed_successfully
+    environment:
+      SUPABASE_URL: http://hardened-kong:8000
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      HARDEN_CLASS: ${HARDEN_CLASS}
+    volumes:
+      - ./infra/harden-storage.mjs:/harden-storage.mjs:ro
+    command: ["node", "/harden-storage.mjs"]
+    restart: "no"
+
+  hardened-web:
+    profiles: ["hardened"]
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: http://localhost:${HARDENED_SUPABASE_PORT}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+        NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
+        NEXT_PUBLIC_SITE_URL: http://localhost:${HARDENED_APP_PORT}/app
+        # HARDENED(secrets): key-001 and key-002 are build args. The hardened
+        # build simply does not receive them, so they cannot be inlined.
+        NEXT_PUBLIC_SUPABASE_SERVICE_KEY: ${HARDENED_SERVICE_KEY}
+        NEXT_PUBLIC_FAKE_OPENAI_KEY: ${HARDENED_OPENAI_KEY}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_OPENAI_ASSISTANT_ID: ${NEXT_PUBLIC_OPENAI_ASSISTANT_ID}
+        NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
+        NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
+        NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+        NEXT_PUBLIC_HARDEN_CLASS: ${HARDEN_CLASS}
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      hardened-kong:
+        condition: service_healthy
+    environment:
+      HOSTNAME: 127.0.0.1
+      PORT: ${HARDENED_APP_PORT}
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:${HARDENED_SUPABASE_PORT}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
+      NEXT_PUBLIC_SITE_URL: http://localhost:${HARDENED_APP_PORT}/app
+      NEXT_PUBLIC_SUPABASE_SERVICE_KEY: ${HARDENED_SERVICE_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+      NEXT_PUBLIC_HARDEN_CLASS: ${HARDEN_CLASS}
+      RLS_MODE: ${RLS_MODE}
+      PERF_MODE: ${PERF_MODE}
+
 volumes:
   db-data:
   storage-data:
+  hardened-db-data:
+  hardened-storage-data:

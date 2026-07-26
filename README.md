@@ -93,6 +93,24 @@ It carries a `version`, and `/__manifest` returns that version plus the current
 dial settings. **Cite all three with any published score or it is not
 reproducible.**
 
+## The hardened reference
+
+```bash
+./harden.sh authz      # fix ONLY app-layer authorization
+./harden.sh all        # fix everything (expect a residual of 9, not 0)
+./harden.sh --sweep    # every class, asserting each diff is minimal
+```
+
+Runs on **:8092** (Supabase on **:8093**) with its own database and GoTrue, so
+the vulnerable target on :8090 stays up for side-by-side comparison. One class
+is fixed at a time — `rls` `secrets` `authz` `injection` `headers` `auth` `qa`
+`perf` — and nothing else is tidied, so the delta is attributable.
+
+`GET /__manifest` on the hardened target declares which findings it fixes and
+which are **expected to remain**. A fully hardened build still has 9 real
+findings; scoring it against zero marks correct results as false positives.
+See `MANIFEST.md`.
+
 ## Modes
 
 Two dials, set in [`.env`](.env):
@@ -171,7 +189,7 @@ web/                       the Next.js app
 
 ## Status
 
-**Passes A and B complete, coverage gaps closed.** Manifest `0.6.0` — 42 findings, 27 controls
+**Passes A and B complete, coverage gaps closed, hardened reference built.** Manifest `0.7.0` — 42 findings, 27 controls
 declared across all modes, all verified against the running stack by
 `./verify.sh` (76 assertions canonical, 85 with `PERF_MODE=on`) and
 `./dial-sweep.sh`.

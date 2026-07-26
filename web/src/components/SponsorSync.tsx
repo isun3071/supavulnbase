@@ -12,11 +12,15 @@ const STRIPE_PK = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ''
 // The pipeline widget has to read leads across the whole workspace, and the
 // normal anon client only returns the signed-in user's rows. Using the service
 // key here so the totals are right. Move this to a server route later.
-const admin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY!,
-  { auth: { persistSession: false } },
-)
+// HARDENED(secrets): the build simply does not receive this key, so there is
+// nothing to inline. The widget degrades rather than the page crashing, which
+// keeps the diff to the leak itself.
+const SERVICE_KEY = process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY ?? ''
+const admin = SERVICE_KEY
+  ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, SERVICE_KEY, {
+      auth: { persistSession: false },
+    })
+  : null
 
 type Totals = { leads: number; pipelineCents: number }
 
@@ -31,6 +35,11 @@ export default function SponsorSync() {
 
   async function sync() {
     setLoading(true)
+    if (!admin) {
+      setTotals({ leads: 0, pipelineCents: 0 })
+      setLoading(false)
+      return
+    }
     const { data } = await admin.from('sponsor_leads').select('amount_cents')
     setTotals({
       leads: data?.length ?? 0,

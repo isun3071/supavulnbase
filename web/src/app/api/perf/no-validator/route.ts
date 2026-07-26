@@ -1,3 +1,5 @@
+import { createHash } from 'crypto'
+import { hardened } from '@/lib/harden'
 // PERF FIXTURE perf-002: static-shaped asset with no validator and no caching.
 //
 // The body never changes, so it is perfectly cacheable, but the response
@@ -13,7 +15,23 @@ const BODY = JSON.stringify({
   note: 'design tokens, unchanged since the first commit',
 })
 
-export async function GET() {
+const ETAG = `"${createHash('sha1').update(BODY).digest('hex').slice(0, 16)}"`
+
+export async function GET(request: Request) {
+  // HARDENED(perf): give it a validator and a cache policy.
+  if (hardened('perf')) {
+    if (request.headers.get('if-none-match') === ETAG) {
+      return new Response(null, { status: 304, headers: { ETag: ETAG } })
+    }
+    return new Response(BODY, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        ETag: ETAG,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      },
+    })
+  }
   return new Response(BODY, {
     status: 200,
     headers: {

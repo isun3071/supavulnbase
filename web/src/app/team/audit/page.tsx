@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js'
+import { hardened } from '@/lib/harden'
+import { adminClient } from '@/lib/admin'
 
 // Recent account activity, read from GoTrue's audit log.
 //
@@ -15,14 +16,12 @@ import { createClient } from '@supabase/supabase-js'
 // a second path to it.
 export const dynamic = 'force-dynamic'
 
-const admin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY!,
-  { auth: { persistSession: false } },
-)
 
 export default async function TeamAuditPage() {
-  const { data: events } = await admin.rpc('recent_auth_events', { limit_count: 25 })
+  // HARDENED(authz): account authentication history is not a team-wide feed.
+  const { data: events } = hardened('authz')
+    ? { data: [] as any[] }
+    : await adminClient().rpc('recent_auth_events', { limit_count: 25 })
 
   return (
     <div>

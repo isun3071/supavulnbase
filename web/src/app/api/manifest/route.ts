@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 // Bump on any change to the finding or control set, or to what an entry
 // asserts. Any published score against this fixture must cite this version AND
 // both dial settings, or it is not reproducible.
-const MANIFEST_VERSION = '0.6.0'
+const MANIFEST_VERSION = '0.7.0'
 
 const RLS_MODE = process.env.RLS_MODE ?? 'off'
 const DISCOVERY_MODE = process.env.NEXT_PUBLIC_DISCOVERY_MODE ?? 'linked'
@@ -132,6 +132,56 @@ const CONTROLS: Entry[] = [
   { id: 'ctl-015', name: 'Login errors do not permit account enumeration', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: 'POST /auth/v1/token?grant_type=password', is_control: true, occurred: 'naturally', note: 'Byte-identical invalid_credentials response for real and nonexistent accounts. Same endpoint as auth-001: one real weakness, one correctly handled.' },
 ]
 
+// Which findings each hardening class actually closes. Deliberately NOT
+// "everything that sounds related": `secrets` removes the two inlined keys and
+// the deployment-file rewrites, but the system prompt and the synthetic account
+// data are still bundle literals, so llm-001 and llm-002 survive it.
+const HARDEN_FIXES: Record<string, string[]> = {
+  rls: ['rls-001', 'rls-002', 'rls-003', 'rls-004', 'rls-005', 'storage-001', 'dial-rls-001'],
+  secrets: ['key-001', 'key-002', 'probe-001', 'probe-002'],
+  authz: ['authz-001', 'authz-002', 'authz-003', 'admin-001', 'dial-disc-001'],
+  injection: ['inj-001', 'tmpl-001', 'xss-001'],
+  headers: ['hdr-001', 'hdr-002'],
+  auth: ['auth-001', 'auth-002'],
+  qa: ['ui-002', 'ui-003', 'ui-004', 'ui-005', 'ui-006'],
+  perf: ['perf-001', 'perf-002', 'perf-003', 'perf-004', 'perf-005'],
+}
+
+const HARDEN_CLASS = process.env.NEXT_PUBLIC_HARDEN_CLASS ?? 'none'
+
+function hardening() {
+  if (HARDEN_CLASS === 'none') return { class: 'none', is_hardened: false }
+
+  const fixed =
+    HARDEN_CLASS === 'all'
+      ? Object.values(HARDEN_FIXES).flat()
+      : (HARDEN_FIXES[HARDEN_CLASS] ?? [])
+
+  const residual = FINDINGS.filter(presentNow)
+    .filter((f) => !fixed.includes(f.id))
+    .map((f) => ({ id: f.id, severity: f.severity }))
+
+  return {
+    class: HARDEN_CLASS,
+    is_hardened: true,
+    fixes: fixed,
+    expected_residual: residual,
+    expected_residual_count: residual.length,
+    note:
+      'A HARDENED BUILD SHOULD SCORE LOW, NOT ZERO. The ids under ' +
+      'expected_residual are still genuinely present and a grader is CORRECT to ' +
+      'report them; treating them as false positives penalises accuracy. They ' +
+      'survive because no class in this set addresses them: the client-side ' +
+      'prompt and its synthetic account data are still bundle literals, ' +
+      'PostgREST still publishes its OpenAPI root and its version banner and ' +
+      'still returns verbose errors, the session cookie still cannot be ' +
+      'HttpOnly under the @supabase/ssr browser-client pattern nor Secure over ' +
+      'plain http, and the discarded-error and settings-save defects are ' +
+      'untouched. Scoring a hardened build against zero is the mistake this ' +
+      'field exists to prevent.',
+  }
+}
+
 function coverage() {
   const by: Record<string, { total: number; exclusive: number }> = {}
   for (const f of FINDINGS.filter(presentNow)) {
@@ -170,6 +220,7 @@ export async function GET() {
           'columns and its seed data are identical in all three. The discovery dial ' +
           'changes only how /api/bookmarks/all can be found, never what it does.',
       },
+      hardening: hardening(),
       counts: {
         findings_present: FINDINGS.filter(presentNow).length,
         controls_present: CONTROLS.filter(presentNow).length,

@@ -1,7 +1,7 @@
 # MANIFEST — ground truth
 
 ```
-version: 0.6.0
+version: 0.7.0
 ```
 
 **Cite this version and both dial settings with any published score, or the
@@ -9,6 +9,63 @@ number is not reproducible.** `/__manifest` returns all three.
 
 **Status: passes A and B complete, plus coverage gaps closed.** 42 findings, 27 controls declared across
 all modes; `/__manifest` reports how many are present in the current one.
+
+## The hardened reference
+
+A second, self-contained stack on its own ports, with **exactly one flaw class
+fixed and nothing else tidied**, so a differential against the vulnerable target
+is attributable to that class alone.
+
+```bash
+./harden.sh authz      # fix only app-layer authorization
+./harden.sh all        # fix everything (expect the residual below)
+./harden.sh none       # sanity: should behave like the vulnerable target
+./harden.sh --sweep    # every class in turn, asserting each diff is minimal
+```
+
+| | |
+|---|---|
+| vulnerable | http://localhost:8090/app |
+| hardened | http://localhost:8092/app (Supabase on :8093) |
+
+Classes: `rls` `secrets` `authz` `injection` `headers` `auth` `qa` `perf`.
+
+It is one codebase gated on `HARDEN_CLASS`, not a second cleaned-up copy —
+that is what guarantees the diff is minimal. Same source, same build, same
+image layers; exactly one class of behaviour changes.
+
+It needs its **own database and its own GoTrue** because two classes are not
+per-container properties: `rls` lives in Postgres policies and `auth` lives in
+gateway/GoTrue configuration. Sharing either would mean hardening one target
+silently hardened the other.
+
+`./harden.sh --sweep` asserts the minimal-diff property directly: for each
+class, that class must read FIXED and all seven others must still read PRESENT.
+It currently passes for all eight. It has already caught two real defects — a
+persisted database volume that left `rls` hardened after any earlier run (fixed
+with an explicit revert overlay) and a probe whose non-unique slug collided
+into a 409 that read as a false FIX.
+
+### Expected residual — a hardened build scores LOW, not ZERO
+
+`GET /__manifest` on the hardened target returns a `hardening` block naming the
+class, the finding ids it fixes, and the **expected residual**. With
+`HARDEN_CLASS=all`, 33 findings are fixed and **9 remain**:
+
+`llm-001` `llm-002` `sum-001` `info-001` `info-002` `cookie-001` `ui-001`
+`err-001` `hdr-003`
+
+These are genuinely still present and **a grader is correct to report them**.
+They survive because no class in the set addresses them: the client-side prompt
+and its synthetic account data are still bundle literals, PostgREST still
+publishes its OpenAPI root, its version banner and verbose errors, the session
+cookie cannot be HttpOnly under the `@supabase/ssr` browser-client pattern nor
+Secure over plain http, and the discarded-error and settings-save defects are
+untouched.
+
+Scoring a hardened build against zero would mark every one of those correct
+findings as a false positive. That is the mistake this declaration exists to
+prevent.
 
 ## Modes
 
