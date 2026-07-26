@@ -50,6 +50,42 @@ services:
     plugins:
       - name: cors
 
+  ## HARDENED(auth): auth-001. GoTrue does not rate-limit the password grant in
+  ## this version, so the limit is applied at the gateway — but ONLY to the
+  ## credential-submission endpoint.
+  ##
+  ## It must NOT cover the whole /auth/v1/ prefix. @supabase/ssr calls
+  ## /auth/v1/user on every single request to validate the session, and the
+  ## middleware matcher covers nearly every route, so a blanket limit throttles
+  ## session checks: getUser() starts returning 429, the user reads as signed
+  ## out, and the app bounces to /login after two clicks. Throttle login
+  ## attempts, not session validation.
+  - name: auth-v1-token
+    _comment: 'GoTrue credential endpoint, rate limited'
+    url: http://hardened-auth:9999/token
+    routes:
+      - name: auth-v1-token
+        strip_path: true
+        paths:
+          - /auth/v1/token
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+      - name: rate-limiting
+        config:
+          minute: $HARDENED_RATE_LIMIT
+          policy: local
+          limit_by: ip
+          fault_tolerant: true
+
   ## GoTrue
   - name: auth-v1
     _comment: 'GoTrue: /auth/v1/* -> http://hardened-auth:9999/*'
@@ -61,16 +97,6 @@ services:
           - /auth/v1/
     plugins:
       - name: cors
-      # HARDENED(auth): auth-001. GoTrue does not rate-limit the password grant
-      # in this version, so the limit is applied at the gateway. harden.sh sets
-      # HARDENED_RATE_LIMIT low for the `auth` class and high otherwise, so this
-      # plugin is present in every hardened build and only BINDS for that class.
-      - name: rate-limiting
-        config:
-          minute: $HARDENED_RATE_LIMIT
-          policy: local
-          limit_by: ip
-          fault_tolerant: true
       - name: key-auth
         config:
           hide_credentials: false

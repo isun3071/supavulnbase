@@ -8,6 +8,9 @@
 #   ./harden.sh none          sanity: behaves like the vulnerable target
 #   ./harden.sh --sweep       every class in turn, reporting the differential
 #
+# Every run also smoke tests the hardened target in a real browser: logs in,
+# walks twelve pages, and asserts no CSP violations and no dropped session.
+#
 # The vulnerable target stays up on :8090 throughout, so the two can be
 # compared side by side.
 #
@@ -75,6 +78,26 @@ bring_up(){ # class
     sleep 3
   done
   echo "  hardened target never came up"; return 1
+}
+
+# A hardened build that cannot be logged into or crawled produces no
+# differential at all, so "does it still work" is part of the hardening
+# contract. Neither the class probes below nor verify.sh notice a broken app:
+# they check that flaws are absent or present, not that the target functions.
+# Two defects shipped exactly that way — a CSP with no connect-src, and a
+# gateway rate limit that covered session validation as well as login. Both
+# left every check green, and neither is visible to curl.
+smoke(){
+  local out rc
+  out=$(node infra/smoke.mjs "$HARD" 2>&1); rc=$?
+  case $rc in
+    0) echo "  smoke: target is usable" ;;
+    2) echo "  smoke: SKIPPED (no browser available)" ;;
+    *) echo "  smoke: TARGET IS BROKEN"
+       echo "$out" | sed 's/^/    /'
+       return 1 ;;
+  esac
+  return 0
 }
 
 # Each probe prints FIXED or PRESENT for one class against the hardened target.
@@ -167,6 +190,7 @@ if [ "$TARGET" = "--sweep" ]; then
   for c in "${CLASSES[@]}"; do
     echo; echo "=== HARDEN_CLASS=$c ==="
     bring_up "$c" || { rc=1; continue; }
+    smoke || rc=1
     report "$c" || rc=1
   done
   echo; echo "=== restoring HARDEN_CLASS=all ==="
@@ -179,9 +203,11 @@ echo "=== HARDEN_CLASS=$TARGET ==="
 bring_up "$TARGET" || exit 1
 echo "  vulnerable: $VULN"
 echo "  hardened:   $HARD"
+smoke || SMOKE_FAILED=1
 if [ "$TARGET" = "none" ]; then
   echo "  (sanity mode: every class should read PRESENT)"
   report "__none__"
 else
   report "$TARGET"
 fi
+exit $(( ${SMOKE_FAILED:-0} ))

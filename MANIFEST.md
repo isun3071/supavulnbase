@@ -63,10 +63,26 @@ worth recording because they are easy to reintroduce:
   authed route unreachable for reasons that look like the target's fault. It is
   now 20/minute; the probe sends 30 attempts, so it still trips.
 
-Both were found by driving a real browser against :8092, not by reading
-headers — `curl` cannot exercise a CSP. Verified end state: UI login lands on
-`/dashboard`, zero CSP violations, and 30 rapid failed logins still return
-10x429 on the hardened target versus 0x429 on the vulnerable one.
+- **The gateway rate limit covered the whole `/auth/v1/` prefix.**
+  `@supabase/ssr` calls `/auth/v1/user` on *every* request to validate the
+  session, and the middleware matcher covers nearly every route, so the limit
+  throttled session checks rather than logins: `getUser()` began returning 429,
+  the user read as signed out, and the app bounced to `/login` after about two
+  clicks. The limit now applies only to `/auth/v1/token`, the
+  credential-submission endpoint — which is also the correct design. Measured
+  after the split: 0 x 429 in 40 session checks, 11 x 429 in 30 login attempts.
+
+None of the three was visible to `curl`: a CSP only takes effect in a browser,
+and a rate limit only bites across a session. All were found by driving Chrome
+against :8092.
+
+**`infra/smoke.mjs` now guards against all three**, and `harden.sh` runs it on
+every build. It logs in through the UI, walks twelve pages across two laps, and
+fails on any CSP violation, any failed request, or any bounce to `/login`. The
+first version did two hops and would have missed the rate-limit bug entirely;
+the twelve-hop walk is what catches a session that decays under normal use.
+Exit 2 means no browser was available and the check was skipped, so a machine
+without Chrome does not report a working target as broken.
 
 A hardened reference that cannot be logged into or crawled produces no
 differential at all, so "does it still work" is part of the hardening contract.

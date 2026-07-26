@@ -106,6 +106,14 @@ the vulnerable target on :8090 stays up for side-by-side comparison. One class
 is fixed at a time — `rls` `secrets` `authz` `injection` `headers` `auth` `qa`
 `perf` — and nothing else is tidied, so the delta is attributable.
 
+Every `harden.sh` run smoke tests the target in a real browser — logs in, walks
+twelve pages, and fails on any CSP violation, failed request, or bounce back to
+`/login`. Run it against anything:
+
+```bash
+node infra/smoke.mjs http://localhost:8090/app     # or :8092, :8091
+```
+
 `GET /__manifest` on the hardened target declares which findings it fixes and
 which are **expected to remain**. A fully hardened build still has 9 real
 findings; scoring it against zero marks correct results as false positives.
