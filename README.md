@@ -45,7 +45,7 @@ overlapping records, and builds and serves the app.
 Check the target matches its answer key at any time:
 
 ```bash
-./verify.sh          # 56 assertions; non-zero exit if anything drifted
+./verify.sh          # 60 assertions; non-zero exit if anything drifted
 ```
 
 `http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
@@ -89,6 +89,55 @@ Self-registration works over plain HTTP at `/app/signup`.
 discovery mechanism, and — for the controls — why a grader that flags it is
 wrong. Read it before "fixing" anything.
 
+It carries a `version`, and `/__manifest` returns that version plus the current
+dial settings. **Cite all three with any published score or it is not
+reproducible.**
+
+## Modes
+
+Two dials, set in [`.env`](.env):
+
+| Dial | Settings | What changes |
+|---|---|---|
+| `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data identical in all three. |
+| `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+
+Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked`.
+
+```bash
+./dial-sweep.sh rls          # 3 modes, fast, no rebuild
+./dial-sweep.sh discovery    # 4 modes, rebuilds the image each time
+```
+
+CI should run the sweep, not just `verify.sh` against one mode — the comparison
+across modes is the reason the dials exist.
+
+## Three things to know before you trust a run
+
+**The app was authored, not scaffolded.** The intended method was to prompt a
+generator and audit whatever came out. That was not possible in the environment
+this was built in, so it was hand-written in the idiom a generator produces —
+App Router, client-side `supabase-js` for all writes, RLS as the only
+authorization layer — and then audited empirically against the running stack
+rather than from memory. The audit is honest; three expected findings were
+falsified by probing and are recorded as controls. But the **shape** carries an
+author's bias that real generator output would not, so treat the distribution of
+defects as illustrative and the individual entries as verified.
+
+**This fixture tests application configuration, not middleware versions.** Every
+finding is about how the app is built and how its policies are written. Nothing
+here exercises a CVE in PostgREST, GoTrue, Kong or Postgres, and the pinned
+images are not kept current. A clean run says the grader handles application
+misconfiguration; it says nothing at all about dependency or middleware
+vulnerabilities.
+
+**Localhost is not the internet.** There is no packet loss, no TLS handshake, no
+geographic latency, and no bandwidth ceiling. That is deliberate: it makes the
+fixture deterministic, which is what lets it validate that an instrument is
+*correct*. It also means any threshold calibrated here will be wrong in the
+field. Calibration belongs to the real-world corpus; this repo establishes
+instrument correctness only.
+
 ## Layout
 
 ```
@@ -104,8 +153,9 @@ web/                       the Next.js app
 
 ## Status
 
-**Planting pass in progress.** 25 findings, 15 controls, all verified against
-the running stack by `./verify.sh` (56 assertions, currently all passing).
+**Planting pass in progress.** Manifest `0.4.0` — 29 findings, 17 controls
+declared across all modes, all verified against the running stack by
+`./verify.sh` (60 assertions, currently all passing) and `./dial-sweep.sh`.
 
 The app was first written as a hackathon team would write it, with no security
 intent in either direction, then audited by hand; that produced the naturally
@@ -117,7 +167,10 @@ Every discovery mechanism in `CLAUDE.md` now gates at least one finding
 reachable by no other path, so a miss tells you which reach capability is
 broken.
 
-Still outstanding: the `interaction`-gated route, anonymous-404
-`authed-discovery` routes, an XSS reflect/escape pair, and the remaining
-UI-state and hygiene fixtures. None of these block a grader run — they are
-coverage gaps, not defects. See the end of `MANIFEST.md`.
+The `interaction` mechanism is now gated by the discovery dial rather than
+resting on one naturally occurring finding.
+
+Still outstanding: anonymous-404 `authed-discovery` routes, an XSS
+reflect/escape pair, and the QA, UI-state and performance fixtures (Pass B).
+None of these block a grader run — they are coverage gaps, not defects. See the
+end of `MANIFEST.md`.

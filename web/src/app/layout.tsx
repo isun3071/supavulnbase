@@ -32,6 +32,9 @@ async function Nav() {
               <Link href="/dashboard" className="text-[#8b949e] hover:text-white">
                 Dashboard
               </Link>
+              <Link href="/bookmarks" className="text-[#8b949e] hover:text-white">
+                Saved
+              </Link>
               <Link href="/settings" className="text-[#8b949e] hover:text-white">
                 Settings
               </Link>

@@ -278,6 +278,31 @@ async function main() {
     }
   }
 
+  // Bookmarks: everyone saves someone ELSE's project with a private note, so a
+  // cross-user read is immediately visible in any RLS dial mode.
+  const bySlug = {}
+  for (const p of await api('/rest/v1/projects?select=id,slug')) bySlug[p.slug] = p.id
+  const BOOKMARKS = [
+    ['ada', 'dockside', 'grace is way ahead of me on the linting idea. borrow the yaml handling?'],
+    ['ada', 'rangecheck', 'ask margaret how she generates the boundary cases'],
+    ['grace', 'lampshade', 'private: honestly nicer than mine. do not tell ada'],
+    ['grace', 'bisecty', 'the stash/unstash trick is clever'],
+    ['linus', 'countdown', 'steal this checklist for the release process'],
+    ['margaret', 'nightjar', 'local-first is the right call, note for the talk'],
+  ]
+  for (const [username, slug, note] of BOOKMARKS) {
+    if (!bySlug[slug]) continue
+    const exists = await api(
+      `/rest/v1/bookmarks?select=id&user_id=eq.${ids[username]}&project_id=eq.${bySlug[slug]}`,
+    )
+    if (exists.length > 0) continue
+    await api('/rest/v1/bookmarks', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: ids[username], project_id: bySlug[slug], note }),
+    })
+    console.log(`  bookmark ${username} -> ${slug}`)
+  }
+
   for (const [username, body] of Object.entries(DRAFTS)) {
     if ((await api(`/rest/v1/drafts?select=id&user_id=eq.${ids[username]}`)).length > 0) continue
     await api('/rest/v1/drafts', {

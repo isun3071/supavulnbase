@@ -85,6 +85,7 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
+      RLS_MODE: ${RLS_MODE}
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
@@ -106,8 +107,24 @@ services:
           $$PSQL -q -c "insert into supabase_migrations.schema_migrations (version) values ('$$v')"
         done
         echo "migrations complete"
+        # Dial: applied every boot and never recorded, so flipping the mode
+        # actually takes effect on an existing volume. Each variant drops the
+        # table's policies first, so switching modes is clean in both
+        # directions.
+        DIAL=/dials/rls/${RLS_MODE}.sql
+        if [ ! -f "$$DIAL" ]; then
+          echo "RLS_MODE=${RLS_MODE} is not one of off|permissive|correct" >&2
+          exit 1
+        fi
+        echo "==> RLS dial: ${RLS_MODE}"
+        $$PSQL -1 -f "$$DIAL"
+        $$PSQL -tAc "select 'bookmarks rls='||c.relrowsecurity||' policies='||
+                       (select count(*) from pg_policies where tablename='bookmarks')
+                     from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                     where n.nspname='public' and c.relname='bookmarks'"
     volumes:
       - ./supabase/migrations:/migrations:ro
+      - ./supabase/dials:/dials:ro
     restart: "no"
 
   ##########################################################################
@@ -250,6 +267,7 @@ services:
         NEXT_PUBLIC_OPENAI_ASSISTANT_ID: ${NEXT_PUBLIC_OPENAI_ASSISTANT_ID}
         NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
         NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
+        NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
     restart: unless-stopped
     # Host networking so the browser and the Next.js server resolve the
     # Supabase URL identically, the way they would against supabase.co.
@@ -264,6 +282,8 @@ services:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
       NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
       NEXT_PUBLIC_SITE_URL: ${SITE_URL}
+      NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+      RLS_MODE: ${RLS_MODE}
 
   ##########################################################################
   # Root-served comparison target. Same app, basePath="", different port.
@@ -289,6 +309,7 @@ services:
         NEXT_PUBLIC_OPENAI_ASSISTANT_ID: ${NEXT_PUBLIC_OPENAI_ASSISTANT_ID}
         NEXT_PUBLIC_VERCEL_PROJECT_ID: ${NEXT_PUBLIC_VERCEL_PROJECT_ID}
         NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
+        NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
     restart: unless-stopped
     network_mode: host
     depends_on:
@@ -301,6 +322,8 @@ services:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
       NEXT_PUBLIC_BASE_PATH: ""
       NEXT_PUBLIC_SITE_URL: http://localhost:${APP_ROOT_PORT}
+      NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+      RLS_MODE: ${RLS_MODE}
 
 volumes:
   db-data:

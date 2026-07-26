@@ -1,6 +1,42 @@
 # MANIFEST — ground truth
 
-**Status: planting pass in progress.** 25 findings, 15 controls.
+```
+version: 0.4.0
+```
+
+**Cite this version and both dial settings with any published score, or the
+number is not reproducible.** `/__manifest` returns all three.
+
+**Status: planting pass in progress.** 29 findings, 17 controls declared across
+all modes; `/__manifest` reports how many are present in the current one.
+
+## Modes
+
+Two dials. Shape A versus shape B is deliberately NOT a third dimension — that
+would be a separate compose profile or a separate repo.
+
+| Dial | Env var | Settings | What changes |
+|---|---|---|---|
+| RLS | `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
+| Discovery | `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+
+**Canonical mode is `RLS_MODE=off` + `DISCOVERY_MODE=linked`.**
+
+One table across three policy variants is the point: three separately named
+tables would confound the comparison with naming and content differences, so
+the policy would no longer be the only variable. Same for the discovery dial —
+the finding is byte-identical, only reachability moves.
+
+The two dials are independent by construction. `dial-rls-001` is a database
+authorization failure reached through PostgREST; `dial-disc-001` is an
+app-layer authorization failure reached through a Next route holding a
+service-role client. `dial-disc-001` leaks the same rows **even when
+`RLS_MODE=correct`**, which is the point: conflating "RLS is correct" with "the
+data is protected" is exactly the mistake the pair catches.
+
+Each entry below carries a `modes:` field when it is mode-dependent. Absent
+means it exists in every mode. CI should run all combinations — the comparison
+is the whole reason the dials exist.
 
 Ground truth is also served over HTTP at **`GET {basePath}/__manifest`**
 (`http://localhost:8090/app/__manifest`). `verify.sh` asserts that the ids
@@ -106,10 +142,42 @@ has been checked, not everything that is true.
     "body": "..."} and only the anon key. The row is created and attributed to
     whichever user_id was supplied.
   notes: |
-    Distinct from rls-001 in what it demonstrates: not just unauthorised write,
-    but unauthenticated *attribution forgery*. The author of an update is taken
-    from the request body and never checked against the session. Content posted
-    this way renders on the public project page as that user's words.
+    Unauthorized write only. The impersonation half was SPLIT OUT into rls-005
+    on review: forging authorship is a different weakness class with a different
+    CWE, and it is the more alarming of the two.
+
+- id: rls-005
+  name: Anonymous attribution forgery — content published as another user
+  category: improper-authentication
+  cwe: CWE-345
+  owasp_2025: A07
+  discovery_mechanism: baas-direct
+  reachable_by_other_means: false
+  location: table `public.updates` via PostgREST, `user_id` column
+  severity: critical
+  is_control: false
+  paired_control: ctl-002
+  occurred: naturally
+  verified_by: |
+    POST /rest/v1/updates with only the anon key and a `user_id` belonging to
+    another user -> HTTP 201. The row is created and attributed to that user.
+    Confirmed the forged entry then renders on the public project page under
+    that person's name, in their update log, indistinguishable from their own
+    writing. Row removed after verification.
+  detection: |
+    Insert an update with a user_id you do not control, then load
+    {basePath}/p/{slug} and observe the content attributed to that account.
+  notes: |
+    SPLIT FROM rls-002 on review. rls-002 is "an anonymous caller can write to a
+    table they should not". This is "an anonymous caller can publish words under
+    a named person's identity", which is impersonation: CWE-345 rather than
+    CWE-306, and A07 rather than A01.
+    The distinction is not academic. The write is the vulnerability; the
+    forgeable authorship is the impact, and it is the half that would matter in
+    an incident review. The author is taken from the request body and never
+    checked against the session, so nothing in the app or the database ties the
+    content to the account it claims to come from.
+    A grader that reports only "unauthorized write" has found half of this.
 
 - id: authz-001
   name: Any authenticated user can open and edit any project's edit page
@@ -694,6 +762,114 @@ has been checked, not everything that is true.
     Same resolution trap as probe-001, second path so the behaviour is not a
     one-off. The token is synthetic and inert.
 
+- id: dial-rls-001
+  name: "RLS dial: bookmarks readable across users"
+  category: broken-access-control
+  cwe: CWE-639
+  owasp_2025: A01
+  discovery_mechanism: baas-direct
+  reachable_by_other_means: false
+  location: table `public.bookmarks` via PostgREST
+  severity: critical
+  is_control: false
+  paired_control: ctl-016
+  occurred: planted
+  modes:
+    rls: [off, permissive]
+  verified_by: |
+    RLS_MODE=off         anon SELECT -> all 6 bookmarks including private notes,
+                         and anon INSERT/UPDATE/DELETE all succeed
+    RLS_MODE=permissive  anon SELECT -> 0 rows; ada SELECT -> 6 rows though she
+                         owns 2; writes correctly refused for rows she does not own
+    RLS_MODE=correct     anon SELECT -> 0 rows; ada SELECT -> exactly her 2
+    Seed data is deliberately cross-user: every bookmark is one person's private
+    note about someone else's project, so a leak is visible immediately.
+  detection: |
+    Query the table with the anon key, then with a registered session, and
+    compare the row count against the number you own.
+  notes: |
+    THE POINT IS THE COMPARISON, NOT THE FINDING. Same table name, same columns,
+    same seed data in all three modes; only the policy set differs. Three
+    separately named tables would have confounded it with naming and content.
+    `permissive` is the setting no platform default prevents. RLS is enabled,
+    four policies exist, three of them are correctly owner-scoped, and every
+    "is RLS on?" check passes — the SELECT policy is
+    `using (auth.role() = 'authenticated')`, which reads as access control and
+    behaves as "is anyone signed in". It is what a generator that writes
+    policies rather than omitting them tends to produce, and writes staying
+    correctly scoped is what makes it easy to miss.
+    Note this finding is NOT reachable anonymously in `permissive`. A grader
+    that never registers an account sees a clean table.
+
+- id: dial-disc-001
+  name: Bookmark export route has no authorization
+  category: broken-access-control
+  cwe: CWE-306
+  owasp_2025: A01
+  discovery_mechanism: varies-by-dial
+  reachable_by_other_means: false
+  location: GET {basePath}/api/bookmarks/all
+  severity: high
+  is_control: false
+  paired_control: null
+  occurred: planted
+  verified_by: |
+    GET with no session and no apikey -> HTTP 200, every user's bookmarks with
+    their private notes. Confirmed identical in all three RLS modes, including
+    `correct`, because the route holds a service-role client.
+    Reachability per DISCOVERY_MODE:
+      linked        anchor present in the served HTML of {basePath}/bookmarks
+      bundle        string literal in one JS chunk, rendered nowhere
+      interaction   returned by POST {basePath}/api/bookmarks {action:"tools"},
+                    which the UI sends only on click; absent from markup and bundle
+      concatenated  assembled from ['api','bookmarks','all'] at click time;
+                    the whole path appears nowhere
+  detection: Depends on the dial. That is the entire purpose of the entry.
+  notes: |
+    THE SECOND DIAL. The finding never changes; only the reach capability
+    required to arrive at it does. Effective mechanism by mode:
+      linked -> static-crawl, bundle -> bundle-mining,
+      interaction -> interaction, concatenated -> suffix-convention.
+    So one fixture sweeps four mechanisms with the vulnerability held constant,
+    which is the cleanest possible measurement of reach independent of detection.
+    IT IS A NEXT ROUTE, DELIBERATELY. The PostgREST OpenAPI root (info-001) is
+    left open and lists every table, so a table-based finding is always
+    enumerable and could not be discovery-gated. A Next route is invisible to
+    OpenAPI, which is what makes this dial meaningful at all.
+    INDEPENDENT OF THE RLS DIAL. It leaks the same rows when RLS_MODE=correct.
+    Reporting "bookmarks are protected" after checking only RLS is exactly the
+    error this catches.
+
+- id: sum-001
+  name: Body-only parameter discoverable solely from a validation error
+  category: information-disclosure
+  cwe: CWE-200
+  owasp_2025: A05
+  discovery_mechanism: schema-error
+  reachable_by_other_means: false
+  location: POST {basePath}/api/summarize, field `toneProfile`
+  severity: low
+  is_control: false
+  paired_control: ctl-017
+  occurred: planted
+  verified_by: |
+    POST {} -> HTTP 400 with Zod issues naming projectSlug, maxSentences and
+    toneProfile. None of the three is a column on any table: 0 matches in
+    information_schema.columns and 0 occurrences in the OpenAPI spec.
+    An unrecognised toneProfile is reflected back in the response body.
+  detection: POST an empty body and read the field names out of the error.
+  notes: |
+    The route exists for an authentic reason: summarising an update log is the
+    one thing client-side supabase-js cannot do, because it calls an external
+    model provider and that key must not be in the browser. It is the shape a
+    Server Action / API route generator produces for this stack, which is what
+    v0 and Bolt emit.
+    Severity is low deliberately. The impact is reflection of an unknown tone
+    name; the value of the entry is that the parameter is unreachable by any
+    other means. info-001 cannot short-circuit it because OpenAPI has nothing to
+    say about a request body field.
+    The same route is also ctl-017, the second proxy false-positive control.
+
 - id: auth-001
   name: No rate limiting on the password grant — unlimited credential stuffing
   category: broken-authentication
@@ -1017,6 +1193,56 @@ has been checked, not everything that is true.
     correct finding is per-endpoint ("the password grant is unlimited"), not
     per-service ("auth is unlimited"). A report phrased the second way is
     overclaiming and this control is what catches it.
+
+- id: ctl-016
+  name: "RLS dial at correct: bookmarks is owner-scoped on all four verbs"
+  category: not-a-finding
+  discovery_mechanism: baas-direct
+  location: table `public.bookmarks`
+  is_control: true
+  occurred: planted
+  modes:
+    rls: [correct]
+  verified_by: |
+    RLS on, four policies, each `auth.uid() = user_id`.
+      anon SELECT -> 0 rows
+      ada  SELECT -> exactly her own 2 rows
+    Table definition, column list and seed rows byte-identical to `off` and
+    `permissive`.
+  why_flagging_this_is_wrong: |
+    Direct pair for dial-rls-001, and the reason the dial is one table rather
+    than three. Everything a detector could key on other than the policy — the
+    name, the columns, the row contents, the route that reads it — is unchanged
+    from the broken modes. A finding reported against public.bookmarks here is
+    a false positive with no confounder to hide behind.
+    CAUTION, AND THIS IS THE INTERESTING PART: dial-disc-001 still leaks these
+    exact rows in this mode, through {basePath}/api/bookmarks/all, because that
+    route holds a service-role client and checks no session. So "the database is
+    correctly scoped" and "the data is protected" come apart here. A grader
+    should report the app-layer route and NOT the table. Reporting the table is
+    a false positive; reporting neither is a miss.
+
+- id: ctl-017
+  name: Summarize route proxies an external provider with no database in the path
+  category: not-a-finding
+  discovery_mechanism: schema-error
+  location: POST {basePath}/api/summarize
+  is_control: true
+  occurred: planted
+  verified_by: |
+    Random latency 0.18-4.1s, intermittent 500 (`connect ETIMEDOUT: model
+    provider did not respond in time`) and 429 with Retry-After, and the parsed
+    request echoed back in every response.
+    Source contains no supabase import and no database call of any kind.
+  why_flagging_this_is_wrong: |
+    Second permanent proxy control, alongside ctl-012, and placed here on
+    purpose: this route is also where the schema-error finding lives, so a
+    grader that discovers sum-001 is immediately holding an endpoint that looks
+    injectable and is not.
+    It trips all three classic oracles at once — multi-second variable latency,
+    intermittent upstream error strings, and full payload reflection — with no
+    interpreter and no database anywhere behind it. Any injection reported here
+    is a false positive.
 
 - id: ctl-015
   name: Login errors do not permit account enumeration

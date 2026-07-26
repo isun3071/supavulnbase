@@ -175,10 +175,45 @@ check ctl-012b "$(grep -c 'supabase' web/src/app/api/integrations/ping/route.ts)
 echo
 echo "== answer key served over HTTP =="
 check manifest "$(code "$APP/__manifest")" 200 "GET {basePath}/__manifest"
-served=$(curl -s "$APP/__manifest" | python3 -c "import sys,json;d=json.load(sys.stdin);print(' '.join(sorted([e['id'] for e in d['findings']+d['controls']])))" 2>/dev/null)
+# Compare the FULL declared set, not just what this mode exposes: the served
+# manifest filters by dial, MANIFEST.md documents every mode.
+served=$(curl -s "$APP/__manifest" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+ids=[e['id'] for e in d['findings']+d['controls']]+[e['id'] for e in d['not_present_in_this_mode']]
+print(' '.join(sorted(ids)))" 2>/dev/null)
 doc=$(grep -oE '^- id: [a-z0-9-]+' MANIFEST.md | awk '{print $3}' | sort | tr '\n' ' ' | sed 's/ $//')
-[ "$served" = "$doc" ] && ok manifest "served ids match MANIFEST.md exactly" \
-  || bad manifest "DRIFT between /__manifest and MANIFEST.md"
+[ "$served" = "$doc" ] && ok manifest "served ids match MANIFEST.md exactly (all modes)" \
+  || bad manifest "DRIFT: served='$served' doc='$doc'"
+
+ver=$(curl -s "$APP/__manifest" | python3 -c "import sys,json;print(json.load(sys.stdin)['manifest_version'])" 2>/dev/null)
+docver=$(grep -oE '^version: [0-9.]+' MANIFEST.md | awk '{print $2}')
+check manifest "$ver" "$docver" "manifest_version agrees with MANIFEST.md ($ver)"
+
+echo
+echo "== dials =="
+mode=$(curl -s "$APP/__manifest" | python3 -c "import sys,json;m=json.load(sys.stdin)['modes'];print(m['rls'],m['discovery'],m['is_canonical'])" 2>/dev/null)
+echo "  mode: rls=$(echo $mode | cut -d' ' -f1) discovery=$(echo $mode | cut -d' ' -f2) canonical=$(echo $mode | cut -d' ' -f3)"
+RLSM=$(echo $mode | cut -d' ' -f1)
+bvis=$(rows "$SB/rest/v1/bookmarks?select=id" "$ADA")
+bown=$(rows "$SB/rest/v1/bookmarks?select=id&user_id=eq.$AID" "$ADA")
+banon=$(rows "$SB/rest/v1/bookmarks?select=id")
+case "$RLSM" in
+  off)
+    [ "$banon" -gt 0 ] && ok dial-rls-001 "RLS off: $banon bookmarks readable with the anon key alone" \
+                       || bad dial-rls-001 "RLS off but anon read returned nothing" ;;
+  permissive)
+    [ "$banon" -eq 0 ] && [ "$bvis" -gt "$bown" ] \
+      && ok dial-rls-001 "permissive: anon sees 0, ada sees $bvis but owns $bown" \
+      || bad dial-rls-001 "permissive expected anon=0 and visible>owned (anon=$banon vis=$bvis own=$bown)" ;;
+  correct)
+    [ "$banon" -eq 0 ] && [ "$bvis" = "$bown" ] \
+      && ok ctl-016 "correct: anon sees 0, ada sees exactly her own ($bown)" \
+      || bad ctl-016 "correct mode leaked (anon=$banon vis=$bvis own=$bown)" ;;
+esac
+check dial-disc-001 "$(code "$APP/api/bookmarks/all")" 200 "export route leaks all bookmarks regardless of RLS mode"
+curl -s "$APP/api/summarize" -X POST -H 'Content-Type: application/json' -d '{}' | grep -q toneProfile \
+  && ok sum-001 "empty POST to /api/summarize leaks toneProfile" || bad sum-001 "toneProfile not in the Zod error"
 
 echo
 echo "== root-served comparison variant (profile: root-variant) =="
