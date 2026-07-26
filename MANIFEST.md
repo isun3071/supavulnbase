@@ -414,11 +414,30 @@ has been checked, not everything that is true.
   paired_control: ctl-010
   verified_by: |
     storage.buckets: project-media public=true, payout-documents public=false
+    GET /storage/v1/bucket with the anon key -> lists both buckets
     GET /storage/v1/object/public/project-media/lampshade/screenshot.txt
       -> HTTP 200, body served with no apikey and no session
+    Asserted at the end of the seed run AND in verify.sh.
   detection: |
-    List buckets or guess the object path; fetch it with no credentials.
+    GET /storage/v1/bucket to enumerate, then fetch the object with no
+    credentials via /storage/v1/object/public/{bucket}/{path}.
   notes: |
+    TWICE CORRECTED after grader feedback on 2026-07-25, and both corrections
+    matter more than the finding.
+    First, it was DECLARED BUT NOT DEPLOYED. The grader got
+    {"error":"Bucket not found"}. Cause: seed.mjs short-circuited on "any
+    project exists", so any stack upgraded without `docker compose down -v` had
+    content from before the buckets were added and never ran the bucket step.
+    The failure was masked because the bucket call was wrapped in a try/catch
+    that logged every error as "already exists". Seeding is now idempotent per
+    resource, the catch is gone, seed depends on storage being healthy, and the
+    run ends by asserting project-media exists and is public — the fixture
+    refuses to come up while claiming a finding it does not have.
+    Second, it was UNDISCOVERABLE. Anonymous GET /storage/v1/bucket returned an
+    empty array because storage.buckets had no SELECT policy, so the bucket was
+    reachable only by guessing its name. A `baas-direct` finding that cannot be
+    enumerated is not really reachable; migration 20260614102000 adds the
+    listing policy.
     Paired with a correctly private bucket holding a synthetic remittance
     document. A grader must distinguish the two rather than reporting
     "storage is exposed".
@@ -578,28 +597,41 @@ has been checked, not everything that is true.
   discovery_mechanism: schema-error
   reachable_by_other_means: false
   location: POST /app/api/feedback, field `renderTemplate`
-  severity: low
+  severity: high
   is_control: false
   paired_control: null
   verified_by: |
     POST {} -> HTTP 400 with Zod issues naming all three required fields:
       path:["message"], path:["rating"], path:["renderTemplate"]
     The handler does `TEMPLATES[renderTemplate] ?? renderTemplate`, so an
-    unknown value is used as the template itself and its {rating} / {message}
-    placeholders are substituted and returned in the response.
+    unknown value becomes the template, and templates are EVALUATED:
+      renderTemplate="{{7*7}}"        -> {"rendered":"49"}
+      renderTemplate="{{rating*20}}"  -> evaluates against the request's rating
   detection: |
     POST an empty body and read the field names out of the validation error.
-    Then supply an arbitrary string as renderTemplate.
+    Then send renderTemplate="{{7*7}}" and observe "49" in the response.
   notes: |
-    THE FIELD NAME IS THE FINDING. Per the decision recorded for info-001, the
-    OpenAPI root at /rest/v1/ is deliberately left open, so this parameter is a
+    REVISED after grader feedback on 2026-07-25. As first built this endpoint
+    echoed the template back verbatim, which was not black-box detectable: a
+    legitimate report builder or email-preview feature accepts a caller-supplied
+    template and reflects it, so there was no observable difference between this
+    app and a correct one. Firing on a field merely named `renderTemplate` would
+    have been a naming heuristic, not evidence. The template is now genuinely
+    evaluated server side, which makes it real SSTI with a provable signal.
+    SCOPE, STATED PRECISELY SO THIS DOES NOT OVERCLAIM. The evaluator in
+    web/src/lib/template.ts is not a general code evaluator. It supports
+    numbers, the named context variables, + - * / %, and parentheses. There is
+    no eval(), no new Function(), no property access, no function calls, and no
+    reachable host object. `{{7*7}}` returns 49; `{{process.env}}` and
+    `{{constructor.constructor('...')()}}` do not evaluate and are returned
+    unchanged. It is deliberately enough to produce the canonical SSTI signal
+    without shipping an RCE primitive in a container that also holds a
+    service_role key. A grader reporting "SSTI, arithmetic evaluation confirmed"
+    is correct. One reporting "RCE" is overclaiming.
+    THE FIELD NAME IS STILL THE DISCOVERY PATH. Per the decision recorded for
+    info-001 the OpenAPI root is deliberately open, so this parameter is a
     request-body-only field that is NOT a column on any table. Verified: 0
-    columns in the public schema match, and it appears 0 times in the OpenAPI
-    spec. An empty POST is the only way to learn it exists.
-    Honest scoping: the impact is reflection of an attacker-controlled format
-    string in a JSON response. There is no eval and no template engine behind
-    it, so this is a low-severity finding whose value is the discovery path,
-    not the blast radius.
+    columns in the public schema match, 0 occurrences in the OpenAPI spec.
 
 - id: probe-001
   name: Deployment .env served under the app root

@@ -198,14 +198,22 @@ async function api(path, init = {}) {
 async function main() {
   await waitForApi()
 
-  const existing = await api('/rest/v1/projects?select=id&limit=1')
-  if (existing.length > 0) {
-    console.log('already seeded, nothing to do')
-    return
-  }
+  // Idempotency is per resource, NOT a single global short-circuit.
+  //
+  // This used to bail out entirely if any project existed. That silently broke
+  // every stack upgraded without `docker compose down -v`: content seeded
+  // before a later commit added the storage buckets would satisfy the check,
+  // the bucket code never ran, and the fixture shipped without a bucket that
+  // MANIFEST.md declared. A declared-but-absent finding is the worst failure
+  // mode a fixture has, so each step now checks its own resource.
 
   const ids = {}
   for (const u of USERS) {
+    const found = await api(`/rest/v1/profiles?select=id&username=eq.${u.username}`)
+    if (found.length > 0) {
+      ids[u.username] = found[0].id
+      continue
+    }
     const created = await api('/auth/v1/admin/users', {
       method: 'POST',
       body: JSON.stringify({
@@ -227,6 +235,7 @@ async function main() {
   for (const [username, projects] of Object.entries(PROJECTS)) {
     for (const p of projects) {
       const { updates, ...project } = p
+      if ((await api(`/rest/v1/projects?select=id&slug=eq.${project.slug}`)).length > 0) continue
       const [row] = await api('/rest/v1/projects', {
         method: 'POST',
         headers: { Prefer: 'return=representation' },
@@ -247,41 +256,62 @@ async function main() {
 
   // sponsor pipeline, payout details, and an unfinished draft per user
   for (const [username, leads] of Object.entries(SPONSOR_LEADS)) {
-    await api('/rest/v1/sponsor_leads', {
-      method: 'POST',
-      body: JSON.stringify(leads.map((l) => ({ ...l, user_id: ids[username] }))),
-    })
+    for (const l of leads) {
+      const q = encodeURIComponent(l.company)
+      if ((await api(`/rest/v1/sponsor_leads?select=id&company=eq.${q}`)).length > 0) continue
+      await api('/rest/v1/sponsor_leads', {
+        method: 'POST',
+        body: JSON.stringify({ ...l, user_id: ids[username] }),
+      })
+      console.log(`  sponsor lead ${l.company}`)
+    }
   }
-  console.log(`  sponsor leads seeded`)
 
   for (const [username, accounts] of Object.entries(PAYOUT_ACCOUNTS)) {
-    await api('/rest/v1/payout_accounts', {
-      method: 'POST',
-      body: JSON.stringify(accounts.map((a) => ({ ...a, user_id: ids[username] }))),
-    })
+    for (const a of accounts) {
+      if ((await api(`/rest/v1/payout_accounts?select=id&user_id=eq.${ids[username]}`)).length > 0) continue
+      await api('/rest/v1/payout_accounts', {
+        method: 'POST',
+        body: JSON.stringify({ ...a, user_id: ids[username] }),
+      })
+      console.log(`  payout account for ${username}`)
+    }
   }
-  console.log(`  payout accounts seeded`)
 
   for (const [username, body] of Object.entries(DRAFTS)) {
+    if ((await api(`/rest/v1/drafts?select=id&user_id=eq.${ids[username]}`)).length > 0) continue
     await api('/rest/v1/drafts', {
       method: 'POST',
       body: JSON.stringify({ user_id: ids[username], body }),
     })
+    console.log(`  draft for ${username}`)
   }
-  console.log(`  drafts seeded`)
 
   // buckets. project-media is served publicly so the feed can show screenshots;
   // payout-documents is private.
+  // storage-api owns these; wait for it rather than racing its boot.
+  for (let i = 0; i < 60; i++) {
+    const r = await fetch(`${URL}/storage/v1/bucket`, { headers: admin }).catch(() => null)
+    if (r?.ok) break
+    if (i === 59) throw new Error('storage API never came up — cannot create buckets')
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+
+  const have = new Set((await api('/storage/v1/bucket')).map((b) => b.id))
   for (const [id, isPublic] of [['project-media', true], ['payout-documents', false]]) {
-    try {
-      await api('/storage/v1/bucket', {
-        method: 'POST',
-        body: JSON.stringify({ id, name: id, public: isPublic }),
-      })
-      console.log(`  bucket ${id} (public=${isPublic})`)
-    } catch (e) {
-      console.log(`  bucket ${id} already exists`)
+    if (have.has(id)) {
+      console.log(`  bucket ${id} already present`)
+      continue
     }
+    // Deliberately not wrapped in try/catch. A bucket that fails to create is
+    // a fixture defect — MANIFEST.md declares storage-001 against this bucket —
+    // and it must fail the seed loudly rather than be logged as "already
+    // exists", which is how it went missing before.
+    await api('/storage/v1/bucket', {
+      method: 'POST',
+      body: JSON.stringify({ id, name: id, public: isPublic }),
+    })
+    console.log(`  bucket ${id} created (public=${isPublic})`)
   }
 
   // one file in each, so the buckets are not empty
@@ -300,8 +330,20 @@ async function main() {
       headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'text/plain' },
       body,
     })
+    // 409 means the object is already there, which is fine on a re-run.
+    if (!res.ok && res.status !== 409) {
+      throw new Error(`upload ${bucket}/${path} failed: ${res.status} ${await res.text()}`)
+    }
     console.log(`  upload ${bucket}/${path} -> ${res.status}`)
   }
+
+  // Final assertion: the fixture must not start while claiming a finding it
+  // does not have.
+  const finalBuckets = (await api('/storage/v1/bucket')).map((b) => `${b.id}:${b.public}`)
+  if (!finalBuckets.includes('project-media:true')) {
+    throw new Error(`storage-001 is declared in MANIFEST.md but project-media is not public: ${finalBuckets}`)
+  }
+  console.log(`  buckets verified: ${finalBuckets.join(', ')}`)
 
   console.log('seed complete')
 }

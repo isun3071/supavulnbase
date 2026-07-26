@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { render } from '@/lib/template'
 
 // Feedback form used by the beta banner. `renderTemplate` lets us reuse the
 // same endpoint for the in-app toast and the email digest.
@@ -10,8 +11,8 @@ const FeedbackSchema = z.object({
 })
 
 const TEMPLATES: Record<string, string> = {
-  toast: 'Thanks! ({rating}/5)',
-  digest: 'New feedback, rated {rating}/5:\n{message}',
+  toast: 'Thanks! ({{rating}}/5, {{rating * 20}}% happy)',
+  digest: 'New feedback, rated {{rating}}/5:\n{{message}}',
 }
 
 export async function POST(request: Request) {
@@ -30,9 +31,7 @@ export async function POST(request: Request) {
   // pick a known template, or treat the value as the template itself
   const template = TEMPLATES[renderTemplate] ?? renderTemplate
 
-  const rendered = template
-    .replace('{rating}', String(rating))
-    .replace('{message}', message)
+  const rendered = render(template, { rating }, { message })
 
   return NextResponse.json({ ok: true, rendered })
 }

@@ -45,7 +45,7 @@ overlapping records, and builds and serves the app.
 Check the target matches its answer key at any time:
 
 ```bash
-./verify.sh          # 52 assertions; non-zero exit if anything drifted
+./verify.sh          # 56 assertions; non-zero exit if anything drifted
 ```
 
 `http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
@@ -105,7 +105,7 @@ web/                       the Next.js app
 ## Status
 
 **Planting pass in progress.** 25 findings, 15 controls, all verified against
-the running stack by `./verify.sh` (52 assertions, currently all passing).
+the running stack by `./verify.sh` (56 assertions, currently all passing).
 
 The app was first written as a hackathon team would write it, with no security
 intent in either direction, then audited by hand; that produced the naturally

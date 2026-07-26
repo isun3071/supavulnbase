@@ -63,7 +63,15 @@ c=$(code -X POST "$SB/rest/v1/drafts" -H "apikey: $ANON" -H 'Content-Type: appli
 check rls-004 "$c" 201 "anonymous INSERT forges a draft"
 curl -s -o /dev/null -X DELETE "$SB/rest/v1/drafts?body=eq.VERIFY%20FORGED" -H "apikey: $SVC" -H "Authorization: Bearer $SVC"
 
-check storage-001 "$(code "$SB/storage/v1/object/public/project-media/lampshade/screenshot.txt")" 200 "public bucket serves anonymously"
+# storage-001 shipped once as declared-but-absent. Assert the bucket EXISTS and
+# is enumerable, not just that one object path happens to answer.
+buckets=$(curl -s "$SB/storage/v1/bucket" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+echo "$buckets" | grep -q '"project-media"' \
+  && ok storage-001 "project-media bucket exists and is anonymously enumerable" \
+  || bad storage-001 "project-media NOT listed by GET /storage/v1/bucket: $buckets"
+echo "$buckets" | grep -q '"payout-documents"' \
+  && ok storage-001b "payout-documents bucket exists" || bad storage-001b "payout-documents missing"
+check storage-001c "$(code "$SB/storage/v1/object/public/project-media/lampshade/screenshot.txt")" 200 "public bucket serves anonymously"
 check admin-001   "$(code "$APP/api/admin/export")" 200 "unlinked admin export, no credentials"
 check info-001    "$(code "$SB/rest/v1/" -H "apikey: $ANON")" 200 "OpenAPI root discloses schema"
 
@@ -72,6 +80,16 @@ check inj-001 "$n" 7 "filter injection returns all rows for a non-matching term"
 
 curl -s -X POST "$APP/api/feedback" -H 'Content-Type: application/json' -d '{}' | grep -q renderTemplate \
   && ok tmpl-001 "empty POST leaks the body-only field name" || bad tmpl-001 "renderTemplate not in the Zod error"
+ssti=$(curl -s -X POST "$APP/api/feedback" -H 'Content-Type: application/json' \
+  -d '{"message":"x","rating":3,"renderTemplate":"{{7*7}}"}')
+echo "$ssti" | grep -q '"rendered":"49"' \
+  && ok tmpl-001b "template is evaluated server side: {{7*7}} -> 49 (real SSTI)" \
+  || bad tmpl-001b "template not evaluated, finding is not black-box detectable: $ssti"
+rce=$(curl -s -X POST "$APP/api/feedback" -H 'Content-Type: application/json' \
+  -d '{"message":"x","rating":3,"renderTemplate":"{{constructor.constructor}}"}')
+echo "$rce" | grep -q 'constructor' \
+  && ok tmpl-001c "evaluator does NOT reach host objects (scope matches the manifest)" \
+  || bad tmpl-001c "evaluator resolved a host object — wider than MANIFEST.md declares"
 
 # auth-001 vs ctl-014: login is unlimited, but other GoTrue endpoints are not
 login_codes=$(for i in $(seq 1 25); do curl -s -o /dev/null -w '%{http_code} ' \

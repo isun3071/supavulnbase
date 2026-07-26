@@ -222,6 +222,9 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      # seed creates the storage buckets, so storage must be up first
+      storage:
+        condition: service_healthy
     environment:
       SUPABASE_URL: http://kong:8000
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
