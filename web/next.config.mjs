@@ -11,9 +11,36 @@ const deployRewrites = hardened('secrets')
       { source: '/.git/config', destination: '/api/deploy-git-config' },
     ]
 
+// The Supabase API is a DIFFERENT ORIGIN from the app: the app is on :8092 and
+// its API on :8093 (and :8090 / :8055 for the vulnerable pair). A CSP without an
+// explicit connect-src falls back to default-src 'self', which blocks every
+// supabase-js call before it is dispatched — the browser shows "failed to
+// fetch" and NOTHING in the network tab, because no request is ever made.
+//
+// That is how the first hardened build shipped, and it made the reference
+// unusable: a target that cannot log in or load data cannot be crawled, so the
+// differential is meaningless. Hardening must not break the app.
+const SUPABASE_ORIGIN = (() => {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').origin
+  } catch {
+    return ''
+  }
+})()
+
 // HARDENED(headers): hdr-002 is one flag; hdr-001 is the header set.
 const SECURITY_HEADERS = [
-  { key: 'Content-Security-Policy', value: "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'" },
+  {
+    key: 'Content-Security-Policy',
+    value: [
+      "default-src 'self'",
+      `connect-src 'self' ${SUPABASE_ORIGIN}`.trim(),
+      `img-src 'self' data: ${SUPABASE_ORIGIN}`.trim(),
+      "style-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline'",
+      "frame-ancestors 'none'",
+    ].join('; '),
+  },
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

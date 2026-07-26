@@ -46,6 +46,31 @@ persisted database volume that left `rls` hardened after any earlier run (fixed
 with an explicit revert overlay) and a probe whose non-unique slug collided
 into a 409 that read as a false FIX.
 
+### The hardened build must still WORK
+
+Two defects in the first hardened build made the target unusable, and both are
+worth recording because they are easy to reintroduce:
+
+- **The CSP had no `connect-src`.** The app is served on one port and its
+  Supabase API on another, so they are different origins. Without an explicit
+  `connect-src` the policy falls back to `default-src 'self'` and the browser
+  blocks every supabase-js call *before dispatch* — the symptom is
+  "failed to fetch" with **nothing in the network tab**, because no request is
+  ever made. The CSP now derives the API origin from
+  `NEXT_PUBLIC_SUPABASE_URL`.
+- **The gateway rate limit was 5/minute.** That stops credential stuffing and
+  also locks out a grader that logs in a few times while crawling, making every
+  authed route unreachable for reasons that look like the target's fault. It is
+  now 20/minute; the probe sends 30 attempts, so it still trips.
+
+Both were found by driving a real browser against :8092, not by reading
+headers — `curl` cannot exercise a CSP. Verified end state: UI login lands on
+`/dashboard`, zero CSP violations, and 30 rapid failed logins still return
+10x429 on the hardened target versus 0x429 on the vulnerable one.
+
+A hardened reference that cannot be logged into or crawled produces no
+differential at all, so "does it still work" is part of the hardening contract.
+
 ### Expected residual — a hardened build scores LOW, not ZERO
 
 `GET /__manifest` on the hardened target returns a `hardening` block naming the

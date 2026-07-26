@@ -46,7 +46,12 @@ bring_up(){ # class
     setenv HARDENED_OPENAI_KEY "$(grep '^NEXT_PUBLIC_FAKE_OPENAI_KEY=' .env | cut -d= -f2-)"
   fi
   if [ "$c" = "auth" ] || [ "$c" = "all" ]; then
-    setenv HARDENED_RATE_LIMIT 5
+    # 20/minute, not 5. The limit has to stop credential stuffing WITHOUT
+    # making the target unusable: at 5 a grader that logs in a few times while
+    # crawling gets locked out and every authed route becomes unreachable,
+    # which destroys the differential for reasons that look like the target's
+    # fault. The auth probe sends 30 attempts, so it still trips.
+    setenv HARDENED_RATE_LIMIT 20
     setenv HARDENED_PW_MIN_LENGTH 12
     setenv HARDENED_PW_REQUIRED_CHARS "abcdefghijklmnopqrstuvwxyz:ABCDEFGHIJKLMNOPQRSTUVWXYZ:0123456789"
   else
@@ -122,7 +127,7 @@ probe(){ # class -> echoes "FIXED"/"PRESENT"
       local h; h=$(curl -sD - -o /dev/null -m 20 "$HARD" | tr 'A-Z' 'a-z' | grep -c '^content-security-policy:')
       [ "$h" = "1" ] && echo FIXED || echo PRESENT ;;
     auth)
-      local codes; codes=$(for _ in $(seq 1 12); do curl -s -o /dev/null -m 20 -w '%{http_code} ' \
+      local codes; codes=$(for _ in $(seq 1 30); do curl -s -o /dev/null -m 20 -w '%{http_code} ' \
         -X POST "$HARD_SB/auth/v1/token?grant_type=password" -H "apikey: $ANON" \
         -H 'Content-Type: application/json' -d '{"email":"ada.demo@buildlog.test","password":"wrong"}'; done)
       echo "$codes" | grep -q 429 && echo FIXED || echo PRESENT ;;
