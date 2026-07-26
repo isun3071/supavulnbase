@@ -29,6 +29,13 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // Perf fixtures are mode-gated. With PERF_MODE=off the whole /perf group 404s,
+  // so a three-second sleep never lands in a normal crawl and cannot gate off
+  // the security or QA probes.
+  if (request.nextUrl.pathname.startsWith('/perf') && process.env.PERF_MODE !== 'on') {
+    return new NextResponse(null, { status: 404 })
+  }
+
   const needsAuth =
     request.nextUrl.pathname.startsWith('/dashboard') ||
     request.nextUrl.pathname.startsWith('/settings')

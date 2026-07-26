@@ -1,13 +1,13 @@
 # MANIFEST — ground truth
 
 ```
-version: 0.4.0
+version: 0.5.0
 ```
 
 **Cite this version and both dial settings with any published score, or the
 number is not reproducible.** `/__manifest` returns all three.
 
-**Status: planting pass in progress.** 29 findings, 17 controls declared across
+**Status: passes A and B complete.** 39 findings, 25 controls declared across
 all modes; `/__manifest` reports how many are present in the current one.
 
 ## Modes
@@ -19,8 +19,9 @@ would be a separate compose profile or a separate repo.
 |---|---|---|---|
 | RLS | `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
 | Discovery | `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+| Perf | `PERF_MODE` | `on` · `off` | Whether the `/perf/*` route group exists at all. Off by default: a three-second sleep in a normal crawl would slow the crawler, trip timeouts and could gate off the security and QA probes. |
 
-**Canonical mode is `RLS_MODE=off` + `DISCOVERY_MODE=linked`.**
+**Canonical mode is `RLS_MODE=off` + `DISCOVERY_MODE=linked` + `PERF_MODE=off`.**
 
 One table across three policy variants is the point: three separately named
 tables would confound the comparison with naming and content differences, so
@@ -870,6 +871,275 @@ has been checked, not everything that is true.
     say about a request body field.
     The same route is also ctl-017, the second proxy false-positive control.
 
+################################################################
+# UI-STATE HONESTY — Pass B
+#
+# Intent-independent and invisible to security scanners: none of these is a
+# vulnerability. Each has a control that is the SAME component with the one
+# wrong behaviour corrected and nothing else changed, so a differential picks
+# up the behaviour and not incidental differences.
+#
+# READ THIS BEFORE JUDGING THE FIXTURE'S REALISM: staleness after a write does
+# NOT occur naturally on this stack. Next 15 treats dynamic routes as
+# immediately stale and refetches them on client-side navigation, so the audit
+# of the generated app found writes propagating correctly everywhere — that
+# result is recorded as ctl-007. Presenting the defect at all required
+# CONSTRUCTING it, by deliberately defeating the framework. Anyone reading this
+# fixture should know that "Next 15 closes this by default" is the reason these
+# entries look artificial: they are.
+################################################################
+
+- id: ui-002
+  name: Create succeeds but the list never updates
+  category: ui-state-honesty
+  cwe: CWE-1188
+  discovery_mechanism: interaction
+  reachable_by_other_means: false
+  location: "{basePath}/qa/stale"
+  severity: medium
+  is_control: false
+  paired_control: ctl-qa-001
+  occurred: planted
+  claim_type: structural
+  verified_by: |
+    POST to the shared items endpoint succeeds and the row is recorded; the
+    rendered list still shows the original three entries until a manual reload.
+    The control at /qa/fresh uses the same component and the same endpoint and
+    updates immediately.
+  detection: |
+    Drive a browser: add an item, then read the list without reloading.
+  notes: |
+    Constructed, not natural — see the block header. The list is held in client
+    state seeded once, and `router.refresh()` is omitted on purpose. The write
+    genuinely lands, which is what makes this dishonest rather than broken.
+
+- id: ui-003
+  name: Save reports success when the request returned 500
+  category: ui-state-honesty
+  cwe: CWE-393
+  discovery_mechanism: interaction
+  reachable_by_other_means: false
+  location: "{basePath}/qa/silent-save"
+  severity: medium
+  is_control: false
+  paired_control: ctl-qa-002
+  occurred: planted
+  claim_type: structural
+  verified_by: |
+    POST {basePath}/api/qa/save -> HTTP 500 every time, for the defect and the
+    control alike. /qa/silent-save renders "Saved"; /qa/honest-save renders the
+    error and says nothing was saved.
+  detection: Click Save and compare the UI against the network response.
+  notes: |
+    The component never inspects the response, which is exactly what
+    `await fetch(...)` with no check produces. Note the endpoint is SHARED with
+    the control, so a probe keyed on "an endpoint returned 500" fires on both
+    and is wrong about one — the 500 is identical, the honesty is not.
+
+- id: ui-004
+  name: Deep link renders an empty shell
+  category: ui-state-honesty
+  cwe: CWE-1188
+  discovery_mechanism: interaction
+  reachable_by_other_means: false
+  location: "{basePath}/qa/deep-link"
+  severity: medium
+  is_control: false
+  paired_control: ctl-qa-003
+  occurred: planted
+  claim_type: structural
+  verified_by: |
+    Cold GET of /qa/deep-link returns markup containing
+    `<div id="deep-link-content"></div>` and it is never populated. The control
+    at /qa/deep-link-ok fetches on mount and renders rows on a cold load.
+  detection: |
+    Request the URL directly rather than navigating to it in-app, then check
+    whether the content container ever fills.
+  notes: |
+    The classic SPA deep-link defect. A crawler that follows an in-app link sees
+    content; one that requests the URL cold sees a shell — so two crawlers can
+    disagree about whether this page has any content at all.
+
+- id: ui-005
+  name: Browser back does not return to the previous view
+  category: ui-state-honesty
+  cwe: CWE-1021
+  discovery_mechanism: interaction
+  reachable_by_other_means: false
+  location: "{basePath}/qa/back-trap"
+  severity: low
+  is_control: false
+  paired_control: ctl-qa-004
+  occurred: planted
+  claim_type: structural
+  verified_by: |
+    The page pushes a duplicate history entry on mount and re-pushes it on every
+    popstate, so Back never leaves. /qa/back-ok is the same page without the
+    trap.
+  detection: Drive a real browser, navigate in, press Back.
+  notes: |
+    Usually arrives in real code via a well-meant "are you sure you want to
+    leave?" guard. No HTTP probe and no static analysis can see it; this one
+    genuinely requires driving a browser.
+
+- id: ui-006
+  name: Served HTML references a JS chunk that 404s
+  category: ui-state-honesty
+  cwe: CWE-1104
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: "{basePath}/qa/dead-chunk"
+  severity: medium
+  is_control: false
+  paired_control: ctl-qa-005
+  occurred: planted
+  claim_type: structural
+  verified_by: |
+    The page markup references /_next/static/chunks/analytics.7f3a91c4.js,
+    which returns 404. The control at /qa/live-chunk references
+    /qa/present.js, which returns 200.
+  detection: |
+    Parse the served HTML for script sources and request each one.
+  notes: |
+    What a stale deploy or a mis-ordered cache-bust leaves behind. The only
+    entry in this group reachable without driving a browser.
+
+################################################################
+# PERFORMANCE — Pass B
+#
+# Two claim types, and the distinction is load-bearing.
+#
+#   structural    A deterministic property of the response or the markup:
+#                 compressed or not, validator present or not, request count,
+#                 byte count. Ground truth here is as unambiguous as "RLS is
+#                 off", and holds on any machine.
+#   timing-floor  A floor GUARANTEED BY CONSTRUCTION, never a measured value.
+#                 "LCP is 4.2s" cannot be ground truth because it depends on
+#                 the environment. "TTFB is at least 3s" can, because a
+#                 server-side sleep makes it true everywhere.
+#
+# The whole group is gated behind PERF_MODE and isolated under /perf/*, so a
+# three-second sleep never lands in the main flow where it would slow the
+# crawler, trip timeouts, or gate off the security and QA probes.
+################################################################
+
+- id: perf-001
+  name: Text response served without compression
+  category: performance
+  cwe: CWE-405
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: GET {basePath}/api/perf/uncompressed
+  severity: medium
+  is_control: false
+  paired_control: ctl-perf-001
+  occurred: planted
+  claim_type: structural
+  modes:
+    perf: [on]
+  verified_by: |
+    With Accept-Encoding: gzip -> Content-Encoding: identity, 124879 bytes on
+    the wire. The control serves a byte-identical body gzipped to 5206 bytes.
+  detection: Request with Accept-Encoding: gzip and read Content-Encoding.
+  notes: |
+    HONEST SCOPE. Next compresses page responses but does NOT compress route
+    handler responses in this configuration, so other /api/* routes are also
+    uncompressed — they just return small JSON where it matters little. This
+    entry is about a large, highly compressible text payload. The control had to
+    gzip explicitly in the handler for the same reason; relying on the framework
+    produced a "compression control" that was itself uncompressed, which is a
+    broken control and was caught by verify.sh.
+
+- id: perf-002
+  name: Cacheable asset served with no validator and no cache headers
+  category: performance
+  cwe: CWE-405
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: GET {basePath}/api/perf/no-validator
+  severity: medium
+  is_control: false
+  paired_control: ctl-perf-002
+  occurred: planted
+  claim_type: structural
+  modes:
+    perf: [on]
+  verified_by: |
+    Response carries zero of Cache-Control, ETag, Last-Modified. The control
+    serves the identical body with an ETag and
+    `Cache-Control: public, max-age=31536000, immutable`, and answers
+    If-None-Match with 304.
+  detection: Read the response headers; try a conditional request.
+  notes: The body never changes, so every re-fetch is pure waste.
+
+- id: perf-003
+  name: Excessive resource requests on the critical path
+  category: performance
+  cwe: CWE-405
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: "{basePath}/perf/requests"
+  severity: medium
+  is_control: false
+  paired_control: ctl-perf-003
+  occurred: planted
+  claim_type: structural
+  modes:
+    perf: [on]
+  verified_by: |
+    60 distinct `dot.png?v=N` URLs in the served markup, all pointing at one
+    68-byte image, each cache-busted so none can be reused.
+  detection: Count resource URLs in the served HTML.
+  notes: |
+    Count the DISTINCT query values, not raw string occurrences: the RSC flight
+    payload repeats each src, so a naive grep reports roughly 168.
+
+- id: perf-004
+  name: Oversized image on the critical path
+  category: performance
+  cwe: CWE-405
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: "{basePath}/perf/image"
+  severity: high
+  is_control: false
+  paired_control: ctl-perf-003
+  occurred: planted
+  claim_type: structural
+  modes:
+    perf: [on]
+  verified_by: |
+    /perf/hero-oversized.png is 4201703 bytes, rendered above the fold at
+    320px wide, eagerly loaded, with no responsive sources.
+  detection: Fetch the image referenced above the fold and measure it.
+  notes: |
+    Incompressible by construction (random pixel data), so the byte count is
+    stable regardless of transport.
+
+- id: perf-005
+  name: TTFB exceeds 3s by construction
+  category: performance
+  cwe: CWE-405
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: "{basePath}/perf/slow"
+  severity: high
+  is_control: false
+  paired_control: ctl-perf-003
+  occurred: planted
+  claim_type: timing-floor
+  modes:
+    perf: [on]
+  verified_by: |
+    Server sleeps 3000ms before rendering. Measured 3.03s here, but the CLAIM
+    is the floor, not that number.
+  detection: Measure time to first byte. It cannot be under three seconds.
+  notes: |
+    THIS ENTRY ASSERTS A FLOOR, NOT A VALUE, and that is the general rule for
+    every timing claim in this fixture. A measured latency is a property of the
+    machine, the container runtime and the current load, so it cannot be ground
+    truth. A construction-guaranteed floor can be, because it holds anywhere.
+
 - id: auth-001
   name: No rate limiting on the password grant — unlimited credential stuffing
   category: broken-authentication
@@ -1243,6 +1513,121 @@ has been checked, not everything that is true.
     intermittent upstream error strings, and full payload reflection — with no
     interpreter and no database anywhere behind it. Any injection reported here
     is a false positive.
+
+- id: ctl-qa-001
+  name: Create invalidates and the list updates
+  category: not-a-finding
+  discovery_mechanism: interaction
+  location: "{basePath}/qa/fresh"
+  is_control: true
+  occurred: planted
+  verified_by: Same component and endpoint as ui-002 with router.refresh() restored; the new item appears without a reload.
+  why_flagging_this_is_wrong: |
+    Minimal diff from the defect: one call restored, nothing else changed, so a
+    differential attributes the delta to invalidation and nothing else.
+
+- id: ctl-qa-002
+  name: Failed save is surfaced to the user
+  category: not-a-finding
+  discovery_mechanism: interaction
+  location: "{basePath}/qa/honest-save"
+  is_control: true
+  occurred: planted
+  verified_by: Posts to the SAME always-500 endpoint as ui-003 and renders the failure.
+  why_flagging_this_is_wrong: |
+    THE SHARPEST CONTROL IN THIS GROUP. The network behaviour is identical to
+    the defect — same endpoint, same 500, same payload. Only the UI's honesty
+    differs. A probe keyed on "a request failed" fires on both and is wrong
+    about this one; the finding is that the interface lies, not that the
+    request failed.
+
+- id: ctl-qa-003
+  name: Deep link renders content on a cold load
+  category: not-a-finding
+  discovery_mechanism: interaction
+  location: "{basePath}/qa/deep-link-ok"
+  is_control: true
+  occurred: planted
+  verified_by: Same component as ui-004 fetching on mount; a direct GET renders rows.
+  why_flagging_this_is_wrong: Content arrives without an in-app navigation, which is the correct behaviour.
+
+- id: ctl-qa-004
+  name: Browser back behaves normally
+  category: not-a-finding
+  discovery_mechanism: interaction
+  location: "{basePath}/qa/back-ok"
+  is_control: true
+  occurred: planted
+  verified_by: Same page as ui-005 without the history re-push.
+  why_flagging_this_is_wrong: Back returns to the previous view.
+
+- id: ctl-qa-005
+  name: Referenced script resolves
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: "{basePath}/qa/live-chunk"
+  is_control: true
+  occurred: planted
+  verified_by: Same markup shape as ui-006; {basePath}/qa/present.js returns 200.
+  why_flagging_this_is_wrong: |
+    A probe that flags any page carrying an async script tag, rather than
+    checking whether the script resolves, fires here wrongly.
+
+- id: ctl-perf-001
+  name: Comparable text response IS compressed
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: GET {basePath}/api/perf/fast
+  is_control: true
+  occurred: planted
+  modes:
+    perf: [on]
+  verified_by: |
+    Byte-identical body to perf-001 (124879 bytes uncompressed), served
+    Content-Encoding: gzip at 5206 bytes on the wire, with Vary: Accept-Encoding.
+  why_flagging_this_is_wrong: |
+    Same size, same content, same route group as the uncompressed one — so
+    compression is the only variable between them.
+
+- id: ctl-perf-002
+  name: Cacheable asset has a validator and an immutable max-age
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: GET {basePath}/api/perf/fast
+  is_control: true
+  occurred: planted
+  modes:
+    perf: [on]
+  verified_by: |
+    ETag present, `Cache-Control: public, max-age=31536000, immutable`, and a
+    conditional request with If-None-Match returns 304.
+  why_flagging_this_is_wrong: Correct on every caching axis perf-002 gets wrong.
+
+- id: ctl-perf-003
+  name: A page that is fast, light and cached
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: "{basePath}/perf/fast"
+  is_control: true
+  occurred: planted
+  modes:
+    perf: [on]
+  verified_by: |
+    No blocking work, two small requests, cached asset. TTFB measured at 0.06s
+    against the 3.03s of perf-005 in the same route group.
+  why_flagging_this_is_wrong: |
+    THE SINGLE MOST VALUABLE ENTRY IN THE PERFORMANCE SET, and the reason to
+    build the perf group at all.
+    It sits in the SAME route group as four deliberate defects, so a probe
+    cannot pass by treating /perf/* as uniformly slow — it has to discriminate
+    within the group.
+    Web-vitals scoring carries substantial penalty weight and has had no
+    external precision evidence of any kind. Findings alone cannot supply that:
+    a probe that fires on everything scores perfectly on findings and is
+    useless. Only a correct-by-construction route that must stay silent
+    measures precision, so this control, not the defects beside it, is what
+    closes that exposure. Any performance finding reported here is a false
+    positive.
 
 - id: ctl-015
   name: Login errors do not permit account enumeration

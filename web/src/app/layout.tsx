@@ -64,6 +64,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="mx-auto max-w-4xl px-5 py-8">{children}</main>
         <footer className="mx-auto max-w-4xl px-5 py-10 text-xs text-[#484f58]">
           BuildLog — a hackathon project. Demo data only. <BuildInfo />
+          {' · '}
+          <Link href="/qa" className="hover:text-white">QA fixtures</Link>
+          {' · '}
+          <Link href="/perf" className="hover:text-white">Perf fixtures</Link>
         </footer>
       </body>
     </html>

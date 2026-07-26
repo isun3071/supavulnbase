@@ -45,7 +45,7 @@ overlapping records, and builds and serves the app.
 Check the target matches its answer key at any time:
 
 ```bash
-./verify.sh          # 60 assertions; non-zero exit if anything drifted
+./verify.sh          # 66 assertions (75 with PERF_MODE=on); non-zero on drift
 ```
 
 `http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
@@ -101,8 +101,9 @@ Two dials, set in [`.env`](.env):
 |---|---|---|
 | `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data identical in all three. |
 | `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+| `PERF_MODE` | `on` · `off` | Whether `/app/perf/*` exists. Off by default — a 3s sleep in a normal crawl would slow the crawler and could gate off other probes. |
 
-Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked`.
+Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked` + `PERF_MODE=off`.
 
 ```bash
 ./dial-sweep.sh rls          # 3 modes, fast, no rebuild
@@ -111,6 +112,23 @@ Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked`.
 
 CI should run the sweep, not just `verify.sh` against one mode — the comparison
 across modes is the reason the dials exist.
+
+### Probe isolation regression test
+
+The fixture serves byte-identical content with no network variance, which makes
+it the only thing that can test this: run the performance probes **solo**, then
+again at **concurrency 5** against the same target, and compare.
+
+```bash
+sed -i 's/^PERF_MODE=.*/PERF_MODE=on/' .env && docker compose up -d web
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_starttransfer}\n' \
+  http://localhost:8090/app/perf/slow & done; wait
+```
+
+Nothing about the target changes between the two runs, so **if the numbers move,
+the probes are contending with each other rather than measuring the target.**
+Every other fixture varies for its own reasons — real network, real backends,
+real caches — so a shift there is unattributable. Here it is not.
 
 ## Three things to know before you trust a run
 
@@ -153,9 +171,19 @@ web/                       the Next.js app
 
 ## Status
 
-**Planting pass in progress.** Manifest `0.4.0` — 29 findings, 17 controls
+**Passes A and B complete.** Manifest `0.5.0` — 39 findings, 25 controls
 declared across all modes, all verified against the running stack by
-`./verify.sh` (60 assertions, currently all passing) and `./dial-sweep.sh`.
+`./verify.sh` (66 assertions canonical, 75 with `PERF_MODE=on`) and
+`./dial-sweep.sh`.
+
+Alongside the security set there are now **UI-state honesty** fixtures at
+`/app/qa/*` (five defects, five controls) and **performance** fixtures at
+`/app/perf/*` (five defects, three controls). Nothing else published covers
+either: the UI-state defects are intent-independent and invisible to security
+scanners, and the perf set separates *structural* claims — compression,
+validators, request counts, byte counts, all deterministic — from *timing*
+claims, which assert a floor guaranteed by construction and never a measured
+value.
 
 The app was first written as a hackathon team would write it, with no security
 intent in either direction, then audited by hand; that produced the naturally
@@ -170,7 +198,6 @@ broken.
 The `interaction` mechanism is now gated by the discovery dial rather than
 resting on one naturally occurring finding.
 
-Still outstanding: anonymous-404 `authed-discovery` routes, an XSS
-reflect/escape pair, and the QA, UI-state and performance fixtures (Pass B).
-None of these block a grader run — they are coverage gaps, not defects. See the
-end of `MANIFEST.md`.
+Still outstanding: anonymous-404 `authed-discovery` routes and an XSS
+reflect/escape pair. Neither blocks a grader run — they are coverage gaps, not
+defects. See the end of `MANIFEST.md`.

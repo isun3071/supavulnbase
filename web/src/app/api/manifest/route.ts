@@ -7,11 +7,12 @@ import { NextResponse } from 'next/server'
 // Bump on any change to the finding or control set, or to what an entry
 // asserts. Any published score against this fixture must cite this version AND
 // both dial settings, or it is not reproducible.
-const MANIFEST_VERSION = '0.4.0'
+const MANIFEST_VERSION = '0.5.0'
 
 const RLS_MODE = process.env.RLS_MODE ?? 'off'
 const DISCOVERY_MODE = process.env.NEXT_PUBLIC_DISCOVERY_MODE ?? 'linked'
-const CANONICAL = { rls: 'off', discovery: 'linked' }
+const PERF_MODE = process.env.PERF_MODE ?? 'off'
+const CANONICAL = { rls: 'off', discovery: 'linked', perf: 'off' }
 
 type Entry = {
   id: string
@@ -27,7 +28,11 @@ type Entry = {
   paired_control?: string | null
   occurred?: 'naturally' | 'planted'
   // Which dial settings this entry exists in. Absent means "all modes".
-  modes?: { rls?: string[]; discovery?: string[] }
+  modes?: { rls?: string[]; discovery?: string[]; perf?: string[] }
+  // Timing entries assert a FLOOR guaranteed by construction, never a measured
+  // value: a latency number would depend on the machine and cannot be ground
+  // truth. Structural entries are deterministic properties of the response.
+  claim_type?: 'structural' | 'timing-floor'
   note?: string
 }
 
@@ -36,6 +41,7 @@ type Entry = {
 function presentNow(e: Entry) {
   if (e.modes?.rls && !e.modes.rls.includes(RLS_MODE)) return false
   if (e.modes?.discovery && !e.modes.discovery.includes(DISCOVERY_MODE)) return false
+  if (e.modes?.perf && !e.modes.perf.includes(PERF_MODE)) return false
   return true
 }
 
@@ -59,6 +65,21 @@ const FINDINGS: Entry[] = [
   { id: 'dial-rls-001', name: 'RLS dial: bookmarks readable across users', category: 'broken-access-control', cwe: 'CWE-639', owasp_2025: 'A01', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'table public.bookmarks via PostgREST', severity: 'critical', is_control: false, paired_control: 'ctl-016', occurred: 'planted', modes: { rls: ['off', 'permissive'] }, note: 'RLS_MODE=off: world readable AND writable with the anon key. RLS_MODE=permissive: RLS is on and policies exist, but SELECT is auth.role()=authenticated, so any registered user reads every row while writes stay owner-scoped. Same table, columns and seed data in all modes.' },
   { id: 'dial-disc-001', name: 'Bookmark export route has no authorization', category: 'broken-access-control', cwe: 'CWE-306', owasp_2025: 'A01', discovery_mechanism: 'varies-by-dial', reachable_by_other_means: false, location: 'GET {basePath}/api/bookmarks/all', severity: 'high', is_control: false, paired_control: null, occurred: 'planted', note: 'The finding is identical in all four discovery modes and is independent of the RLS dial: the route holds a service-role client and checks no session, so it leaks every user\'s private notes even when RLS_MODE=correct. Only reachability changes: linked=static-crawl, bundle=bundle-mining, interaction=interaction, concatenated=suffix-convention. Being a Next route, the PostgREST OpenAPI root cannot reveal it.' },
   { id: 'sum-001', name: 'Body-only parameter discoverable solely from a validation error', category: 'information-disclosure', cwe: 'CWE-200', owasp_2025: 'A05', discovery_mechanism: 'schema-error', reachable_by_other_means: false, location: 'POST {basePath}/api/summarize, field toneProfile', severity: 'low', is_control: false, paired_control: 'ctl-017', occurred: 'planted', note: 'POST {} returns Zod issues naming projectSlug, maxSentences and toneProfile. None is a column on any table, so info-001 cannot short-circuit it. An unknown toneProfile is reflected in the response. Severity is low on purpose: the value is the discovery path, not the blast radius.' },
+  // ---- UI-state honesty. Intent-independent, invisible to security scanners.
+  { id: 'ui-002', name: 'Create succeeds but the list never updates', category: 'ui-state-honesty', cwe: 'CWE-1188', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/stale', severity: 'medium', is_control: false, paired_control: 'ctl-qa-001', occurred: 'planted', claim_type: 'structural', note: 'CONSTRUCTED, NOT NATURAL. Next 15 treats dynamic routes as immediately stale and refetches on client navigation, so this does not occur on its own — the audit found writes propagating correctly everywhere (ctl-007). Presenting it required holding the list in client state and omitting router.refresh() on purpose. The write really lands; a manual reload shows it.' },
+  { id: 'ui-003', name: 'Save reports success when the request returned 500', category: 'ui-state-honesty', cwe: 'CWE-393', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/silent-save', severity: 'medium', is_control: false, paired_control: 'ctl-qa-002', occurred: 'planted', claim_type: 'structural', note: 'The endpoint returns 500 every time. The component never inspects the response, which is what `await fetch(...)` with no check produces.' },
+  { id: 'ui-004', name: 'Deep link renders an empty shell', category: 'ui-state-honesty', cwe: 'CWE-1188', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/deep-link', severity: 'medium', is_control: false, paired_control: 'ctl-qa-003', occurred: 'planted', claim_type: 'structural', note: 'Data is fetched only in response to an in-app navigation, so a cold GET returns markup with an empty container that never fills. A crawler following a link sees content; one requesting the URL directly sees a shell.' },
+  { id: 'ui-005', name: 'Browser back does not return to the previous view', category: 'ui-state-honesty', cwe: 'CWE-1021', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/back-trap', severity: 'low', is_control: false, paired_control: 'ctl-qa-004', occurred: 'planted', claim_type: 'structural', note: 'The page re-pushes itself onto the history stack on popstate. Requires driving a real browser; no static analysis or HTTP probe can see it.' },
+  { id: 'ui-006', name: 'Served HTML references a JS chunk that 404s', category: 'ui-state-honesty', cwe: 'CWE-1104', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: '{basePath}/qa/dead-chunk', severity: 'medium', is_control: false, paired_control: 'ctl-qa-005', occurred: 'planted', claim_type: 'structural', note: 'The script reference is real and the request is really made; the file is not on the server. What a stale deploy or a bad cache-bust leaves behind.' },
+
+  // ---- Performance. Structural entries are deterministic; the timing entry
+  // ---- asserts a floor guaranteed by construction, never a measured value.
+  { id: 'perf-001', name: 'Text response served without compression', category: 'performance', cwe: 'CWE-405', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: 'GET {basePath}/api/perf/uncompressed', severity: 'medium', is_control: false, paired_control: 'ctl-perf-001', occurred: 'planted', modes: { perf: ['on'] }, claim_type: 'structural', note: 'Highly repetitive text served with Content-Encoding: identity. Whether a response is compressed is a property of the response, so ground truth is unambiguous.' },
+  { id: 'perf-002', name: 'Cacheable asset served with no validator and no cache headers', category: 'performance', cwe: 'CWE-405', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: 'GET {basePath}/api/perf/no-validator', severity: 'medium', is_control: false, paired_control: 'ctl-perf-002', occurred: 'planted', modes: { perf: ['on'] }, claim_type: 'structural', note: 'Body never changes, yet there is no Cache-Control, no ETag and no Last-Modified, so no conditional request is possible and every visit re-downloads.' },
+  { id: 'perf-003', name: 'Excessive resource requests on the critical path', category: 'performance', cwe: 'CWE-405', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: '{basePath}/perf/requests', severity: 'medium', is_control: false, paired_control: 'ctl-perf-003', occurred: 'planted', modes: { perf: ['on'] }, claim_type: 'structural', note: '60 requests for one 68-byte image, each cache-busted with a distinct query string so none can be reused. The count is a property of the served markup.' },
+  { id: 'perf-004', name: 'Oversized image on the critical path', category: 'performance', cwe: 'CWE-405', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: '{basePath}/perf/image', severity: 'high', is_control: false, paired_control: 'ctl-perf-003', occurred: 'planted', modes: { perf: ['on'] }, claim_type: 'structural', note: 'A 4.2MB PNG rendered above the fold at 320px wide, eagerly loaded, with no responsive sources. Byte count and position are both deterministic.' },
+  { id: 'perf-005', name: 'TTFB exceeds 3s by construction', category: 'performance', cwe: 'CWE-405', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: '{basePath}/perf/slow', severity: 'high', is_control: false, paired_control: 'ctl-perf-003', occurred: 'planted', modes: { perf: ['on'] }, claim_type: 'timing-floor', note: 'ASSERTS A FLOOR, NOT A VALUE. The route sleeps 3000ms server-side before rendering, so first byte cannot arrive sooner than that on any machine. A claim like "LCP is 4.2s" would not be ground truth because it depends on the environment; "at least 3s" is true everywhere.' },
+
   { id: 'auth-001', name: 'No rate limiting on the password grant — unlimited credential stuffing', category: 'broken-authentication', cwe: 'CWE-307', owasp_2025: 'A07', discovery_mechanism: 'static-crawl', reachable_by_other_means: true, location: 'POST /auth/v1/token?grant_type=password', severity: 'high', is_control: false, paired_control: 'ctl-014', occurred: 'naturally', note: '45 failed logins produced zero 429s and no lockout. Found after the planting pass; a natural omission, not a plant.' },
   { id: 'auth-002', name: 'Weak password policy — six characters, no complexity, no breach check', category: 'broken-authentication', cwe: 'CWE-521', owasp_2025: 'A07', discovery_mechanism: 'static-crawl', reachable_by_other_means: true, location: 'POST /auth/v1/signup', severity: 'low', is_control: false, paired_control: null, occurred: 'naturally', note: '"aaaaaa" is accepted; only a length>=6 rule exists.' },
   { id: 'info-001', name: 'PostgREST OpenAPI root discloses the full schema', category: 'information-disclosure', cwe: 'CWE-200', owasp_2025: 'A05', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'GET /rest/v1/ on the Supabase gateway', severity: 'medium', is_control: false, paired_control: null, occurred: 'naturally' },
@@ -88,6 +109,19 @@ const CONTROLS: Entry[] = [
   { id: 'ctl-014', name: 'Other auth endpoints ARE rate limited', category: 'not-a-finding', discovery_mechanism: 'baas-direct', location: 'POST /auth/v1/recover and /auth/v1/otp', is_control: true, occurred: 'naturally', note: 'Both 429 after a single request. Pair for auth-001: the correct finding is per-endpoint ("the password grant is unlimited"), not per-service ("auth is unlimited").' },
   { id: 'ctl-016', name: 'RLS dial at correct: bookmarks is owner-scoped on all four verbs', category: 'not-a-finding', discovery_mechanism: 'baas-direct', location: 'table public.bookmarks', is_control: true, occurred: 'planted', modes: { rls: ['correct'] }, note: 'Byte-identical table, columns and seed data to the broken modes; only the policies differ. A finding reported against public.bookmarks in this mode is a false positive. Note dial-disc-001 still leaks the same data through the app route in this mode — that is an app-layer failure, not an RLS one, and conflating them is the mistake this pair catches.' },
   { id: 'ctl-017', name: 'Summarize route proxies an external model provider with no database in the path', category: 'not-a-finding', discovery_mechanism: 'schema-error', location: 'POST {basePath}/api/summarize', is_control: true, occurred: 'planted', note: 'Second proxy control, alongside ctl-012. Random 0.18-4.1s latency, intermittent 500/429 with connect/timeout language, and the request echoed back. No database anywhere in the path, so injection is impossible. Timing, error-string and reflection oracles all fire here and are all wrong.' },
+  // ---- UI-state controls. Each is the same component as its defect, with the
+  // ---- one wrong behaviour corrected and nothing else changed.
+  { id: 'ctl-qa-001', name: 'Create invalidates and the list updates', category: 'not-a-finding', discovery_mechanism: 'interaction', location: '{basePath}/qa/fresh', is_control: true, occurred: 'planted', note: 'Same component and endpoint as ui-002 with router.refresh() restored. Reporting stale UI here is a false positive.' },
+  { id: 'ctl-qa-002', name: 'Failed save is surfaced to the user', category: 'not-a-finding', discovery_mechanism: 'interaction', location: '{basePath}/qa/honest-save', is_control: true, occurred: 'planted', note: 'Posts to the SAME always-500 endpoint as ui-003 and reports the failure. A probe that flags "save endpoint returns 500" without checking whether the UI admits it will fire here wrongly — the 500 is identical, the honesty is not.' },
+  { id: 'ctl-qa-003', name: 'Deep link renders content on a cold load', category: 'not-a-finding', discovery_mechanism: 'interaction', location: '{basePath}/qa/deep-link-ok', is_control: true, occurred: 'planted', note: 'Same component as ui-004, fetching on mount. A direct GET renders content.' },
+  { id: 'ctl-qa-004', name: 'Browser back behaves normally', category: 'not-a-finding', discovery_mechanism: 'interaction', location: '{basePath}/qa/back-ok', is_control: true, occurred: 'planted', note: 'Same page as ui-005 without the history re-push.' },
+  { id: 'ctl-qa-005', name: 'Referenced script resolves', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: '{basePath}/qa/live-chunk', is_control: true, occurred: 'planted', note: 'Same markup shape as ui-006; the script exists and returns 200.' },
+
+  // ---- Performance controls. THE MOST VALUABLE ENTRIES IN THE PERF SET.
+  { id: 'ctl-perf-001', name: 'Comparable text response IS compressed', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: 'GET {basePath}/api/perf/fast', is_control: true, occurred: 'planted', modes: { perf: ['on'] }, note: 'Pair for perf-001.' },
+  { id: 'ctl-perf-002', name: 'Cacheable asset has an ETag and an immutable max-age', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: 'GET {basePath}/api/perf/fast', is_control: true, occurred: 'planted', modes: { perf: ['on'] }, note: 'Pair for perf-002. Serves the identical body to /api/perf/no-validator with ETag and Cache-Control: public, max-age=31536000, immutable, and answers If-None-Match with 304.' },
+  { id: 'ctl-perf-003', name: 'A page that is fast, light and cached', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: '{basePath}/perf/fast', is_control: true, occurred: 'planted', modes: { perf: ['on'] }, note: 'Sits in the SAME route group as the defects, so a probe cannot pass by treating /perf/* as uniformly bad. No blocking work, no oversized asset, two small requests. Web-vitals scoring carries substantial penalty weight with no external precision evidence, so this control — not the findings beside it — is what closes that exposure. Any finding reported here is a false positive.' },
+
   { id: 'ctl-015', name: 'Login errors do not permit account enumeration', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: 'POST /auth/v1/token?grant_type=password', is_control: true, occurred: 'naturally', note: 'Byte-identical invalid_credentials response for real and nonexistent accounts. Same endpoint as auth-001: one real weakness, one correctly handled.' },
 ]
 
@@ -117,8 +151,12 @@ export async function GET() {
       modes: {
         rls: RLS_MODE,
         discovery: DISCOVERY_MODE,
+        perf: PERF_MODE,
         canonical: CANONICAL,
-        is_canonical: RLS_MODE === CANONICAL.rls && DISCOVERY_MODE === CANONICAL.discovery,
+        is_canonical:
+          RLS_MODE === CANONICAL.rls &&
+          DISCOVERY_MODE === CANONICAL.discovery &&
+          PERF_MODE === CANONICAL.perf,
         note:
           'Cite manifest_version AND both dial settings with any published score. ' +
           'The RLS dial changes only the policies on public.bookmarks; the table, its ' +

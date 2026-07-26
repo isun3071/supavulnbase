@@ -1,0 +1,12 @@
+import SaveForm from '@/components/qa/SaveForm'
+export default function SilentSavePage() {
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">Preferences (silent)</h1>
+      <p className="mb-6 mt-1 text-sm text-[#8b949e]">
+        The save endpoint returns 500 every time. This form reports success anyway.
+      </p>
+      <SaveForm honest={false} />
+    </div>
+  )
+}

@@ -284,6 +284,7 @@ services:
       NEXT_PUBLIC_SITE_URL: ${SITE_URL}
       NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
       RLS_MODE: ${RLS_MODE}
+      PERF_MODE: ${PERF_MODE}
 
   ##########################################################################
   # Root-served comparison target. Same app, basePath="", different port.
@@ -324,6 +325,7 @@ services:
       NEXT_PUBLIC_SITE_URL: http://localhost:${APP_ROOT_PORT}
       NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
       RLS_MODE: ${RLS_MODE}
+      PERF_MODE: ${PERF_MODE}
 
 volumes:
   db-data:

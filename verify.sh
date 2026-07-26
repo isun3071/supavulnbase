@@ -226,9 +226,61 @@ else
 fi
 
 echo
+echo "== UI-state honesty (defect / control pairs) =="
+check ui-006  "$(code "$APP/_next/static/chunks/analytics.7f3a91c4.js")" 404 "ui-006 referenced chunk 404s"
+check ctl-qa-005 "$(code "$APP/qa/present.js")" 200 "ctl-qa-005 referenced script resolves"
+for p in stale fresh silent-save honest-save deep-link deep-link-ok back-trap back-ok dead-chunk live-chunk; do
+  c=$(code "$APP/qa/$p")
+  [ "$c" = "200" ] || bad qa "/qa/$p returned $c"
+done
+ok qa "all ten /qa/* defect and control routes serve"
+# the save endpoint fails for BOTH ui-003 and its control; only the UI differs
+check ui-003 "$(code -X POST "$APP/api/qa/save" -H 'Content-Type: application/json' -d '{"value":"x"}')" 500 \
+  "shared save endpoint returns 500 for the defect and the control alike"
+curl -s "$APP/qa/deep-link" | grep -q 'id="deep-link-content"></div>' \
+  && ok ui-004 "cold load of /qa/deep-link renders an empty shell" \
+  || bad ui-004 "deep-link shell not empty on a cold load"
+
+echo
+echo "== performance (PERF_MODE=$(curl -s "$APP/__manifest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["modes"]["perf"])' 2>/dev/null)) =="
+PM=$(curl -s "$APP/__manifest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["modes"]["perf"])' 2>/dev/null)
+if [ "$PM" = "on" ]; then
+  enc_bad=$(curl -sD - -o /dev/null -H 'Accept-Encoding: gzip' "$APP/api/perf/uncompressed" | grep -ic 'content-encoding: gzip')
+  enc_ok=$(curl -sD - -o /dev/null -H 'Accept-Encoding: gzip' "$APP/api/perf/fast" | grep -ic 'content-encoding: gzip')
+  check perf-001 "$enc_bad" 0 "perf-001 large text served uncompressed"
+  check ctl-perf-001 "$enc_ok" 1 "ctl-perf-001 comparable text IS gzipped"
+  b1=$(curl -s -H 'Accept-Encoding: identity' "$APP/api/perf/uncompressed" | wc -c | tr -d ' ')
+  b2=$(curl -s -H 'Accept-Encoding: identity' "$APP/api/perf/fast" | wc -c | tr -d ' ')
+  check perf-001b "$b1" "$b2" "both bodies identical in size, so compression is the only variable"
+
+  check perf-002 "$(curl -sD - -o /dev/null "$APP/api/perf/no-validator" | grep -icE '^(cache-control|etag|last-modified)')" 0 \
+    "perf-002 no validator and no cache headers"
+  check ctl-perf-002 "$(curl -sD - -o /dev/null "$APP/api/perf/fast" | grep -icE '^(cache-control|etag)')" 2 \
+    "ctl-perf-002 has ETag and immutable max-age"
+  et=$(curl -sD - -o /dev/null "$APP/api/perf/fast" | grep -i '^etag' | tr -d '\r' | awk '{print $2}')
+  check ctl-perf-002b "$(code -H "If-None-Match: $et" "$APP/api/perf/fast")" 304 "ctl-perf-002 revalidates to 304"
+
+  check perf-003 "$(curl -s "$APP/perf/requests" | grep -o 'dot\.png?v=[0-9]*' | sort -u | wc -l | tr -d ' ')" 60 \
+    "perf-003 60 distinct cache-busted requests"
+  sz=$(curl -s -o /dev/null -w '%{size_download}' "$APP/perf/hero-oversized.png")
+  [ "$sz" -gt 3000000 ] && ok perf-004 "perf-004 hero image is ${sz} bytes" || bad perf-004 "hero image only ${sz} bytes"
+
+  t=$(curl -s -o /dev/null -w '%{time_starttransfer}' "$APP/perf/slow")
+  awk -v t="$t" 'BEGIN{exit !(t>=3.0)}' \
+    && ok perf-005 "perf-005 TTFB ${t}s meets the 3s floor (a floor, not a measurement)" \
+    || bad perf-005 "TTFB ${t}s is below the declared 3s floor"
+  tf=$(curl -s -o /dev/null -w '%{time_starttransfer}' "$APP/perf/fast")
+  awk -v t="$tf" 'BEGIN{exit !(t<1.0)}' \
+    && ok ctl-perf-003 "ctl-perf-003 control page TTFB ${tf}s" || bad ctl-perf-003 "control page slow: ${tf}s"
+else
+  check perf-gate "$(code "$APP/perf/slow")" 404 "PERF_MODE=off: /perf/* is 404 and cannot slow a crawl"
+  echo "  skip   perf fixtures (set PERF_MODE=on in .env to enable)"
+fi
+
+echo
 echo "== NOT YET BUILT (see end of MANIFEST.md) =="
 grep -rq 'dangerouslySetInnerHTML' web/src && echo "  ready  xss         sink present" || echo "  todo   xss         no reflect/escape pair exists"
-[ -d web/src/app/dashboard/insights ] && echo "  ready  interaction click-gated route present" || echo "  todo   interaction no click-gated route"
+echo "  ready  interaction gated by DISCOVERY_MODE (see ./dial-sweep.sh discovery)"
 
 echo
 echo "-------------------------------------------"
