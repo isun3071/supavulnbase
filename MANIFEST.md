@@ -61,7 +61,7 @@ worth recording because they are easy to reintroduce:
 - **The gateway rate limit was 5/minute.** That stops credential stuffing and
   also locks out a grader that logs in a few times while crawling, making every
   authed route unreachable for reasons that look like the target's fault. It is
-  now 20/minute; the probe sends 30 attempts, so it still trips.
+  now 8/minute on the credential endpoint only.
 
 - **The gateway rate limit covered the whole `/auth/v1/` prefix.**
   `@supabase/ssr` calls `/auth/v1/user` on *every* request to validate the

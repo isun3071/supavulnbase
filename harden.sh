@@ -49,12 +49,22 @@ bring_up(){ # class
     setenv HARDENED_OPENAI_KEY "$(grep '^NEXT_PUBLIC_FAKE_OPENAI_KEY=' .env | cut -d= -f2-)"
   fi
   if [ "$c" = "auth" ] || [ "$c" = "all" ]; then
-    # 20/minute, not 5. The limit has to stop credential stuffing WITHOUT
-    # making the target unusable: at 5 a grader that logs in a few times while
-    # crawling gets locked out and every authed route becomes unreachable,
-    # which destroys the differential for reasons that look like the target's
-    # fault. The auth probe sends 30 attempts, so it still trips.
-    setenv HARDENED_RATE_LIMIT 20
+    # 8/minute: tuned so a scanner with a ~10-request probe budget actually
+    # trips it (8 pass, the rest 429) rather than measuring a limit it never
+    # reaches.
+    #
+    # Safe at this value ONLY because the limit sits on /auth/v1/token alone.
+    # Session validation goes to /auth/v1/user and is unthrottled — measured
+    # 0 x 429 across 60 checks — so browsing and crawling are unaffected no
+    # matter how long the session runs. An earlier build applied the limit to
+    # the whole /auth/v1/ prefix and the app bounced to /login after two clicks.
+    #
+    # KNOWN TRADEOFF: the 8/minute budget is shared by login AND token refresh,
+    # both of which are /auth/v1/token. Measured 6 fresh logins before lockout.
+    # A grader that re-authenticates more than ~8 times a minute will be locked
+    # out; one that logs in and then crawls will not. Raise this if a client
+    # needs to re-auth aggressively.
+    setenv HARDENED_RATE_LIMIT 8
     setenv HARDENED_PW_MIN_LENGTH 12
     setenv HARDENED_PW_REQUIRED_CHARS "abcdefghijklmnopqrstuvwxyz:ABCDEFGHIJKLMNOPQRSTUVWXYZ:0123456789"
   else
