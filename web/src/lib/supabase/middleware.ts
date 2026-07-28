@@ -36,6 +36,14 @@ export async function updateSession(request: NextRequest) {
     return new NextResponse(null, { status: 404 })
   }
 
+  // SIGNUP_MODE=interaction: no conventional registration route exists.
+  if (
+    request.nextUrl.pathname.startsWith('/signup') &&
+    process.env.NEXT_PUBLIC_SIGNUP_MODE === 'interaction'
+  ) {
+    return new NextResponse(null, { status: 404 })
+  }
+
   // authz-002 / authz-003: the team area 404s when anonymous instead of
   // redirecting. A redirect confirms a route exists; a 404 does not, so these
   // are crawlable only with a session carried into the crawl.

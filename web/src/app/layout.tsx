@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import SignOutButton from '@/components/SignOutButton'
 import BuildInfo from '@/components/BuildInfo'
+import { signupIsLinked } from '@/lib/signup'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -45,9 +46,11 @@ async function Nav() {
               <Link href="/login" className="text-[#8b949e] hover:text-white">
                 Log in
               </Link>
-              <Link href="/signup" className="btn">
-                Sign up
-              </Link>
+              {signupIsLinked() && (
+                <Link href="/signup" className="btn">
+                  Sign up
+                </Link>
+              )}
             </>
           )}
         </div>
@@ -66,8 +69,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           BuildLog — a hackathon project. Demo data only. <BuildInfo />
           {' · '}
           <Link href="/qa" className="hover:text-white">QA fixtures</Link>
-          {' · '}
-          <Link href="/perf" className="hover:text-white">Perf fixtures</Link>
+          {/* Only linked when the route exists. Linking it unconditionally
+              while PERF_MODE=off makes it a dead link in the shipped HTML —
+              a real broken-link defect created by the mode gate itself, and
+              one that fired on the HARDENED build too. */}
+          {process.env.PERF_MODE === 'on' && (
+            <>
+              {' · '}
+              <Link href="/perf" className="hover:text-white">Perf fixtures</Link>
+            </>
+          )}
         </footer>
       </body>
     </html>

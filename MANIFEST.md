@@ -7,7 +7,7 @@ version: 0.7.0
 **Cite this version and both dial settings with any published score, or the
 number is not reproducible.** `/__manifest` returns all three.
 
-**Status: passes A and B complete, plus coverage gaps closed.** 42 findings, 27 controls declared across
+**Status: passes A and B complete, coverage gaps closed, auth-failure taxonomy added.** 45 findings, 29 controls declared across
 all modes; `/__manifest` reports how many are present in the current one.
 
 ## The hardened reference
@@ -1070,6 +1070,85 @@ has been checked, not everything that is true.
     write.
 
 ################################################################
+# AUTH-FAILURE TAXONOMY
+#
+# Registration is where graders fail in the field, and until now this fixture
+# always registered successfully — so none of the real failure modes reproduced
+# and no grader's handling of them could be verified. These reproduce the
+# measured taxonomy from 120 hackathon apps, with the observed frequencies.
+#
+# Selected with ./signup.sh <mode>. Canonical is `normal`.
+#
+# THE TWO CONTROLS CARRY AS MUCH WEIGHT AS THE DEFECTS. Without them there is no
+# way to separate "the grader is broken" from "this target is legitimately
+# untestable", which is the distinction that is expensive to get wrong.
+################################################################
+
+- id: signup-001
+  name: Registration reachable only via a client-side interaction
+  category: auth-reachability
+  cwe: CWE-1110
+  discovery_mechanism: interaction
+  reachable_by_other_means: false
+  location: "{basePath}/ — the \"Get started\" button"
+  is_control: false
+  occurred: planted
+  modes:
+    signup: [interaction]
+  verified_by: |
+    27.5% of the measured corpus.
+      GET /app/signup                      -> 404
+      the string "signup" in served HTML   -> 0 occurrences
+      homepage without clicking            -> 0 forms, 0 requests to /auth/v1/*
+      homepage after clicking "Get started"-> form appears, registration
+                                              completes, session granted
+  notes: |
+    There is no conventional route and no link. The button says "Get started",
+    not "Sign up" — in the field these are labelled "Try it", "Join the beta",
+    and matching on the word would find this far too easily.
+
+- id: signup-002
+  name: Submit blocked by an unlabelled required input — no request is sent
+  category: auth-reachability
+  cwe: CWE-1110
+  discovery_mechanism: static-crawl
+  reachable_by_other_means: false
+  location: "{basePath}/signup"
+  is_control: false
+  occurred: planted
+  modes:
+    signup: [unlabeled]
+  verified_by: |
+    26.7% of the measured corpus. Filling username, email and password by
+    accessible name and submitting produced **0 requests to /auth/v1/***, and
+    the page stayed on /signup.
+  notes: |
+    One required input carries no name, no id, no placeholder and no
+    aria-label, and its caption is a sibling element with no `htmlFor`. A
+    filler that locates fields by accessible name cannot see it, leaves it
+    empty, and HTML5 validation blocks submit before dispatch. The failure is
+    silent on both sides: no error to the user, no request on the wire.
+
+- id: signup-003
+  name: Login-only homepage with registration linked from nowhere
+  category: auth-reachability
+  cwe: CWE-1110
+  discovery_mechanism: suffix-convention
+  reachable_by_other_means: false
+  location: "{basePath}/ is a login form; {basePath}/signup is unlinked"
+  is_control: false
+  occurred: planted
+  modes:
+    signup: [login-only]
+  verified_by: |
+    Homepage renders one form and it is LOGIN. `href="/app/signup"` appears 0
+    times in the served HTML, while GET /app/signup still returns 200.
+  notes: |
+    A grader that fills the first form it finds submits credentials to login
+    and never walks to the registration route. Reaching it requires guessing
+    the conventional /signup path rather than following a link.
+
+################################################################
 # UI-STATE HONESTY — Pass B
 #
 # Intent-independent and invisible to security scanners: none of these is a
@@ -1756,6 +1835,46 @@ has been checked, not everything that is true.
     The absent Secure attribute on the real session cookie is already recorded
     as cookie-001, and it is REQUIRED for this fixture to work over http, so
     reporting these two endpoints as a finding is wrong.
+
+- id: ctl-signup-001
+  name: Registration succeeds but grants no session (email confirmation)
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: "{basePath}/signup"
+  is_control: true
+  occurred: planted
+  modes:
+    signup: [confirm]
+  verified_by: |
+    15.0% of the measured corpus. 1 request to /auth/v1/signup, HTTP 200, the
+    account IS created, no session is returned, and the UI renders
+    "Account created. Check your email to confirm before signing in."
+  why_flagging_this_is_wrong: |
+    Registration worked. The deployment requires email confirmation, so no
+    session is issued and everything behind authentication is CORRECTLY
+    unreachable. The right report is N/A for every authed check, not a
+    registration failure and not a crawler defect.
+    This control exists to separate "our crawler is broken" from "this target
+    is legitimately untestable". Without it those two look identical, and
+    guessing wrong in either direction is expensive.
+
+- id: ctl-signup-002
+  name: "SSO-only: self-registration is not offered"
+  category: not-a-finding
+  discovery_mechanism: static-crawl
+  location: "{basePath}/signup"
+  is_control: true
+  occurred: planted
+  modes:
+    signup: [sso]
+  verified_by: |
+    7.5% of the measured corpus. No registration form is rendered (0 forms on
+    the page), and the API refuses outright:
+      POST /auth/v1/signup -> 422 {"error_code":"signup_disabled"}
+  why_flagging_this_is_wrong: |
+    There is no account to create, by design. Correctly untestable in exactly
+    the same way as ctl-signup-001, and reporting a registration defect here is
+    a false positive.
 
 - id: ctl-qa-001
   name: Create invalidates and the list updates

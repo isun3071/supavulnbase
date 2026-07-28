@@ -53,7 +53,9 @@ services:
 
       GOTRUE_SITE_URL: ${SITE_URL}
       GOTRUE_URI_ALLOW_LIST: "*"
-      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP}
+      # SIGNUP_MODE drives these: `sso` disables self-registration entirely,
+      # `confirm` stops auto-confirming so signup grants no session.
+      GOTRUE_DISABLE_SIGNUP: ${SIGNUP_DISABLED}
 
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
@@ -62,7 +64,7 @@ services:
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
 
       GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP}
-      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM}
+      GOTRUE_MAILER_AUTOCONFIRM: ${SIGNUP_AUTOCONFIRM}
       GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: ${ENABLE_ANONYMOUS_USERS}
       GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
       GOTRUE_SMS_AUTOCONFIRM: "true"
@@ -269,6 +271,7 @@ services:
         NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
         NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
         NEXT_PUBLIC_HARDEN_CLASS: "none"
+        NEXT_PUBLIC_SIGNUP_MODE: ${SIGNUP_MODE}
     restart: unless-stopped
     # Host networking so the browser and the Next.js server resolve the
     # Supabase URL identically, the way they would against supabase.co.
@@ -284,6 +287,7 @@ services:
       NEXT_PUBLIC_BASE_PATH: ${APP_BASE_PATH}
       NEXT_PUBLIC_SITE_URL: ${SITE_URL}
       NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
+      NEXT_PUBLIC_SIGNUP_MODE: ${SIGNUP_MODE}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       RLS_MODE: ${RLS_MODE}
       PERF_MODE: ${PERF_MODE}
@@ -582,6 +586,7 @@ services:
         NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID: ${NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID}
         NEXT_PUBLIC_DISCOVERY_MODE: ${DISCOVERY_MODE}
         NEXT_PUBLIC_HARDEN_CLASS: ${HARDEN_CLASS}
+        NEXT_PUBLIC_SIGNUP_MODE: ${SIGNUP_MODE}
     restart: unless-stopped
     network_mode: host
     depends_on:

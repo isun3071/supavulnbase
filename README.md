@@ -127,9 +127,15 @@ Two dials, set in [`.env`](.env):
 |---|---|---|
 | `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data identical in all three. |
 | `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+| `SIGNUP_MODE` | `normal` · `interaction` · `unlabeled` · `login-only` · `confirm` · `sso` | How registration behaves. Reproduces the measured auth-failure taxonomy; `confirm` and `sso` are controls that must stay N/A. Use `./signup.sh <mode>`. |
 | `PERF_MODE` | `on` · `off` | Whether `/app/perf/*` exists. Off by default — a 3s sleep in a normal crawl would slow the crawler and could gate off other probes. |
 
-Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked` + `PERF_MODE=off`.
+Canonical is `RLS_MODE=off` + `DISCOVERY_MODE=linked` + `PERF_MODE=off` +
+`SIGNUP_MODE=normal`.
+
+```bash
+./signup.sh interaction   # rebuilds :8090 with that registration failure mode
+```
 
 ```bash
 ./dial-sweep.sh rls          # 3 modes, fast, no rebuild

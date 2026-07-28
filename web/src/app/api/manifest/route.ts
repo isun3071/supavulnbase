@@ -12,7 +12,8 @@ const MANIFEST_VERSION = '0.7.0'
 const RLS_MODE = process.env.RLS_MODE ?? 'off'
 const DISCOVERY_MODE = process.env.NEXT_PUBLIC_DISCOVERY_MODE ?? 'linked'
 const PERF_MODE = process.env.PERF_MODE ?? 'off'
-const CANONICAL = { rls: 'off', discovery: 'linked', perf: 'off' }
+const SIGNUP_MODE = process.env.NEXT_PUBLIC_SIGNUP_MODE ?? 'normal'
+const CANONICAL = { rls: 'off', discovery: 'linked', perf: 'off', signup: 'normal' }
 
 type Entry = {
   id: string
@@ -28,7 +29,11 @@ type Entry = {
   paired_control?: string | null
   occurred?: 'naturally' | 'planted'
   // Which dial settings this entry exists in. Absent means "all modes".
-  modes?: { rls?: string[]; discovery?: string[]; perf?: string[] }
+  modes?: { rls?: string[]; discovery?: string[]; perf?: string[]; signup?: string[] }
+  // Entries a consumer may legitimately collapse into one finding. Two ids with
+  // the same variant_group are the same underlying disclosure seen twice; a
+  // count of 1 against them is not a miss.
+  variant_group?: string
   // Timing entries assert a FLOOR guaranteed by construction, never a measured
   // value: a latency number would depend on the machine and cannot be ground
   // truth. Structural entries are deterministic properties of the response.
@@ -42,6 +47,7 @@ function presentNow(e: Entry) {
   if (e.modes?.rls && !e.modes.rls.includes(RLS_MODE)) return false
   if (e.modes?.discovery && !e.modes.discovery.includes(DISCOVERY_MODE)) return false
   if (e.modes?.perf && !e.modes.perf.includes(PERF_MODE)) return false
+  if (e.modes?.signup && !e.modes.signup.includes(SIGNUP_MODE)) return false
   return true
 }
 
@@ -69,6 +75,10 @@ const FINDINGS: Entry[] = [
   { id: 'authz-003', name: 'Activity feed exposes account authentication history', category: 'information-disclosure', cwe: 'CWE-200', owasp_2025: 'A01', discovery_mechanism: 'authed-discovery', reachable_by_other_means: false, location: 'GET {basePath}/team/audit', severity: 'medium', is_control: false, paired_control: null, occurred: 'planted', note: 'Second anon-404 route. Exposes sign-ins, signups and password-recovery requests keyed by email, revealing who is active and when. NO IP ADDRESSES: GoTrue records none in this configuration, and the fixture deliberately does not claim any. The backing function is granted to service_role only, so PostgREST is not a second path.' },
   { id: 'xss-001', name: 'Stored XSS via unescaped project description', category: 'injection', cwe: 'CWE-79', owasp_2025: 'A03', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: 'GET {basePath}/p/{slug}/rich', severity: 'high', is_control: false, paired_control: 'ctl-xss-001', occurred: 'planted', note: 'The stored description is interpolated as raw HTML via dangerouslySetInnerHTML. Chains with rls-001: public.projects has no RLS, so an anonymous PATCH stores the payload and it then executes for every visitor. Verified end to end — anon PATCH -> 204, payload present unescaped in the served HTML. The seeded description carries an inert <span data-html-probe> so the sink is observable without writing.' },
 
+  { id: 'signup-001', name: 'Registration reachable only via a client-side interaction', category: 'auth-reachability', cwe: 'CWE-1110', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/ — "Get started" button', severity: 'n/a-fixture', is_control: false, paired_control: null, occurred: 'planted', modes: { signup: ['interaction'] }, note: '27.5% of the measured corpus. /signup returns 404 and the string "signup" appears 0 times in the served HTML. Verified: no click -> 0 forms and 0 auth requests; after the click -> registration completes and a session is granted. Button text is deliberately "Get started", not "Sign up".' },
+  { id: 'signup-002', name: 'Submit blocked by an unlabelled required input — no request is sent', category: 'auth-reachability', cwe: 'CWE-1110', discovery_mechanism: 'static-crawl', reachable_by_other_means: false, location: '{basePath}/signup', severity: 'n/a-fixture', is_control: false, paired_control: null, occurred: 'planted', modes: { signup: ['unlabeled'] }, note: '26.7% of the measured corpus. One required input has no name, id, placeholder or aria-label, and its caption is an unassociated sibling. A filler that locates fields by accessible name leaves it empty and HTML5 validation blocks submit. VERIFIED: 0 requests to /auth/v1/* — the failure is silent on both sides.' },
+  { id: 'signup-003', name: 'Login-only homepage with registration linked from nowhere', category: 'auth-reachability', cwe: 'CWE-1110', discovery_mechanism: 'suffix-convention', reachable_by_other_means: false, location: '{basePath}/ is login; {basePath}/signup is unlinked', severity: 'n/a-fixture', is_control: false, paired_control: null, occurred: 'planted', modes: { signup: ['login-only'] }, note: 'The first form on the homepage is LOGIN. A grader that fills the first form it sees submits credentials there and never walks to the registration route, which is reachable at /signup but linked from nowhere.' },
+
   // ---- UI-state honesty. Intent-independent, invisible to security scanners.
   { id: 'ui-002', name: 'Create succeeds but the list never updates', category: 'ui-state-honesty', cwe: 'CWE-1188', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/stale', severity: 'medium', is_control: false, paired_control: 'ctl-qa-001', occurred: 'planted', claim_type: 'structural', note: 'CONSTRUCTED, NOT NATURAL. Next 15 treats dynamic routes as immediately stale and refetches on client navigation, so this does not occur on its own — the audit found writes propagating correctly everywhere (ctl-007). Presenting it required holding the list in client state and omitting router.refresh() on purpose. The write really lands; a manual reload shows it.' },
   { id: 'ui-003', name: 'Save reports success when the request returned 500', category: 'ui-state-honesty', cwe: 'CWE-393', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/qa/silent-save', severity: 'medium', is_control: false, paired_control: 'ctl-qa-002', occurred: 'planted', claim_type: 'structural', note: 'The endpoint returns 500 every time. The component never inspects the response, which is what `await fetch(...)` with no check produces.' },
@@ -86,8 +96,8 @@ const FINDINGS: Entry[] = [
 
   { id: 'auth-001', name: 'No rate limiting on the password grant — unlimited credential stuffing', category: 'broken-authentication', cwe: 'CWE-307', owasp_2025: 'A07', discovery_mechanism: 'static-crawl', reachable_by_other_means: true, location: 'POST /auth/v1/token?grant_type=password', severity: 'high', is_control: false, paired_control: 'ctl-014', occurred: 'naturally', note: '45 failed logins produced zero 429s and no lockout. Found after the planting pass; a natural omission, not a plant.' },
   { id: 'auth-002', name: 'Weak password policy — six characters, no complexity, no breach check', category: 'broken-authentication', cwe: 'CWE-521', owasp_2025: 'A07', discovery_mechanism: 'static-crawl', reachable_by_other_means: true, location: 'POST /auth/v1/signup', severity: 'low', is_control: false, paired_control: null, occurred: 'naturally', note: '"aaaaaa" is accepted; only a length>=6 rule exists.' },
-  { id: 'info-001', name: 'PostgREST OpenAPI root discloses the full schema', category: 'information-disclosure', cwe: 'CWE-200', owasp_2025: 'A05', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'GET /rest/v1/ on the Supabase gateway', severity: 'medium', is_control: false, paired_control: null, occurred: 'naturally' },
-  { id: 'info-002', name: 'Verbose SQL errors leak column names and SQLSTATE', category: 'information-disclosure', cwe: 'CWE-209', owasp_2025: 'A05', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'PostgREST error responses', severity: 'low', is_control: false, paired_control: null, occurred: 'naturally' },
+  { id: 'info-001', name: 'PostgREST OpenAPI root discloses the full schema', category: 'information-disclosure', cwe: 'CWE-200', owasp_2025: 'A05', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'GET /rest/v1/ on the Supabase gateway', severity: 'medium', is_control: false, paired_control: null, occurred: 'naturally', variant_group: 'backend-disclosure' },
+  { id: 'info-002', name: 'Verbose SQL errors leak column names and SQLSTATE', category: 'information-disclosure', cwe: 'CWE-209', owasp_2025: 'A05', discovery_mechanism: 'baas-direct', reachable_by_other_means: false, location: 'PostgREST error responses', severity: 'low', is_control: false, paired_control: null, occurred: 'naturally', variant_group: 'backend-disclosure', note: 'Same variant_group as info-001: both are backend disclosure through the data API. A consumer that counts these as ONE finding is not missing anything.' },
   { id: 'cookie-001', name: 'Session cookie is not HttpOnly, not Secure, and lives 400 days', category: 'session-management', cwe: 'CWE-1004', owasp_2025: 'A05', discovery_mechanism: 'authed-discovery', reachable_by_other_means: false, location: 'Set-Cookie sb-localhost-auth-token', severity: 'medium', is_control: false, paired_control: null, occurred: 'naturally' },
   { id: 'ui-001', name: 'Settings save reports success when the write changed nothing', category: 'ui-state-honesty', cwe: 'CWE-393', discovery_mechanism: 'interaction', reachable_by_other_means: false, location: '{basePath}/settings', severity: 'medium', is_control: false, paired_control: null, occurred: 'naturally' },
   { id: 'err-001', name: 'Supabase errors discarded across 13 call sites', category: 'error-handling', cwe: 'CWE-390', discovery_mechanism: 'source-review', reachable_by_other_means: false, location: 'web/src — 9 read paths, 4 write paths', severity: 'low', is_control: false, paired_control: null, occurred: 'naturally' },
@@ -115,6 +125,9 @@ const CONTROLS: Entry[] = [
   { id: 'ctl-017', name: 'Summarize route proxies an external model provider with no database in the path', category: 'not-a-finding', discovery_mechanism: 'schema-error', location: 'POST {basePath}/api/summarize', is_control: true, occurred: 'planted', note: 'Second proxy control, alongside ctl-012. Random 0.18-4.1s latency, intermittent 500/429 with connect/timeout language, and the request echoed back. No database anywhere in the path, so injection is impossible. Timing, error-string and reflection oracles all fire here and are all wrong.' },
   { id: 'ctl-xss-001', name: 'Sibling route renders the same stored field escaped', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: 'GET {basePath}/p/{slug}/plain', is_control: true, occurred: 'planted', note: 'Reads the SAME description from the SAME row and renders it through JSX, which escapes. Verified with a live payload: /rich served <img src=x onerror=...> raw while /plain served &lt;img .... A grader reporting XSS here has flagged the presence of attacker-controlled content rather than an injection sink — the content is identical, only the sink differs.' },
   { id: 'ctl-cookie-001', name: 'Secure and non-Secure cookie pair (client diagnostic)', category: 'not-a-finding', discovery_mechanism: 'authed-discovery', location: 'POST {basePath}/api/session/secure-flag and /plain-flag, read at /echo', is_control: true, occurred: 'planted', note: 'DIAGNOSTIC, NOT A VULNERABILITY, and it measures the CLIENT rather than the target. Over plain http a correct browser-equivalent client returns bl_plain and not bl_secure. Returning BOTH means the client transmits Secure cookies over an insecure channel; returning NEITHER means it drops cookies entirely, which invalidates every authed-discovery result it produces. The missing Secure attribute is already recorded as cookie-001 and is required for the fixture to work over http, so flagging these endpoints as a finding is wrong.' },
+
+  { id: 'ctl-signup-001', name: 'Registration succeeds but grants no session (email confirmation)', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: '{basePath}/signup', is_control: true, occurred: 'planted', modes: { signup: ['confirm'] }, note: '15.0% of the measured corpus. THE ACCOUNT IS GENUINELY CREATED — verified: 1 request to /auth/v1/signup, no session returned, and the UI says to check email. Everything behind authentication is then CORRECTLY unreachable. A grader must record N/A, not a registration failure. Without this control there is no way to distinguish "our crawler is broken" from "this target is legitimately untestable".' },
+  { id: 'ctl-signup-002', name: 'SSO-only: self-registration is not offered', category: 'not-a-finding', discovery_mechanism: 'static-crawl', location: '{basePath}/signup', is_control: true, occurred: 'planted', modes: { signup: ['sso'] }, note: '7.5% of the measured corpus. No registration form is rendered and the API refuses: POST /auth/v1/signup -> 422 signup_disabled. Correctly untestable, exactly like ctl-signup-001. Reporting a registration defect here is a false positive.' },
 
   // ---- UI-state controls. Each is the same component as its defect, with the
   // ---- one wrong behaviour corrected and nothing else changed.
@@ -209,11 +222,13 @@ export async function GET() {
         rls: RLS_MODE,
         discovery: DISCOVERY_MODE,
         perf: PERF_MODE,
+        signup: SIGNUP_MODE,
         canonical: CANONICAL,
         is_canonical:
           RLS_MODE === CANONICAL.rls &&
           DISCOVERY_MODE === CANONICAL.discovery &&
-          PERF_MODE === CANONICAL.perf,
+          PERF_MODE === CANONICAL.perf &&
+          SIGNUP_MODE === CANONICAL.signup,
         note:
           'Cite manifest_version AND both dial settings with any published score. ' +
           'The RLS dial changes only the policies on public.bookmarks; the table, its ' +

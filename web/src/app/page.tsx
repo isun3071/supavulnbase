@@ -1,5 +1,8 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { SIGNUP_MODE } from '@/lib/signup'
+import InlineSignup from '@/components/InlineSignup'
+import LoginForm from '@/components/LoginForm'
 
 export default async function HomePage() {
   const supabase = await createClient()
@@ -17,6 +20,23 @@ export default async function HomePage() {
         <p className="mt-1 text-sm text-[#8b949e]">
           People shipping things in public. Follow along, or start your own log.
         </p>
+
+        {/* SIGNUP_MODE=interaction: the ONLY route to registration. */}
+        {SIGNUP_MODE === 'interaction' && (
+          <div className="mt-6">
+            <InlineSignup />
+          </div>
+        )}
+
+        {/* SIGNUP_MODE=login-only: the first form on the homepage is LOGIN.
+            A grader that fills the first form it sees submits credentials here
+            and never walks to /signup, which is linked from nowhere. */}
+        {SIGNUP_MODE === 'login-only' && (
+          <div className="card mt-6 max-w-sm p-4">
+            <h2 className="mb-3 font-semibold">Sign in to continue</h2>
+            <LoginForm />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">
