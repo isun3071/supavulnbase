@@ -21,7 +21,15 @@ export default function CreateList({
   initial: string[]
 }) {
   const router = useRouter()
-  const [items] = useState(initial)
+  // Seeded once from props and never reconciled. When invalidate is true the
+  // router refresh re-renders the server component with a new `initial`, and
+  // syncing to it is what makes the correct variant correct. When false, this
+  // state is the only source the list ever reads, so the write is invisible
+  // until a full page load replaces the component entirely.
+  const [items, setItems] = useState(initial)
+  if (invalidate && initial.join('\u0000') !== items.join('\u0000')) {
+    setItems(initial)
+  }
   const [title, setTitle] = useState('')
   const [saved, setSaved] = useState(0)
 

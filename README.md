@@ -112,7 +112,14 @@ twelve pages, and fails on any CSP violation, failed request, or bounce back to
 
 ```bash
 node infra/smoke.mjs http://localhost:8090/app     # or :8092, :8091
+node infra/ui-check.mjs http://localhost:8090/app  # UI-state pairs (browser)
 ```
+
+`ui-check.mjs` asserts each UI-state defect and its control behave
+*differently*. Those five are purely client-side, so `verify.sh` cannot see
+them — and one shipped with the defect and its control equally broken while
+every HTTP check stayed green. It skips cleanly on a target where the `qa`
+class is hardened, since the defects are correctly absent there.
 
 `GET /__manifest` on the hardened target declares which findings it fixes and
 which are **expected to remain**. A fully hardened build still has 9 real

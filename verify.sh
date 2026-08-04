@@ -270,6 +270,15 @@ curl -s "$APP/qa/deep-link" | grep -q 'id="deep-link-content"></div>' \
   || bad ui-004 "deep-link shell not empty on a cold load"
 
 echo
+echo "== UI-state pairs (browser; HTTP cannot see these) =="
+uiout=$(node infra/ui-check.mjs "$APP" 2>&1); uirc=$?
+case $uirc in
+  0) echo "$uiout" | sed 's/^/  /'; pass=$((pass+1)) ;;
+  2) echo "  skip   ui-state pairs (no browser available)" ;;
+  *) echo "$uiout" | sed 's/^/  /'; fail=$((fail+1)) ;;
+esac
+
+echo
 echo "== performance (PERF_MODE=$(curl -s "$APP/__manifest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["modes"]["perf"])' 2>/dev/null)) =="
 PM=$(curl -s "$APP/__manifest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["modes"]["perf"])' 2>/dev/null)
 if [ "$PM" = "on" ]; then

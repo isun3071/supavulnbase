@@ -1189,6 +1189,16 @@ has been checked, not everything that is true.
     Constructed, not natural — see the block header. The list is held in client
     state seeded once, and `router.refresh()` is omitted on purpose. The write
     genuinely lands, which is what makes this dishonest rather than broken.
+    SHIPPED BROKEN ONCE, AND THE CONTROL WITH IT. The page originally passed a
+    hardcoded array into the component instead of reading the store, so no
+    render ever reflected a write — a manual reload did not update the list
+    either, and /qa/stale and /qa/fresh were indistinguishable. ctl-qa-001
+    claimed "create invalidates and the list updates" and it never did.
+    verify.sh could not see any of it, because the whole behaviour is
+    client-side and nothing about it appears in a response body. That gap is
+    now closed by infra/ui-check.mjs, which asserts the defect and its control
+    behave DIFFERENTLY — asserting only the defect would have passed on the
+    broken build too, since both halves were equally broken.
 
 - id: ui-003
   name: Save reports success when the request returned 500
