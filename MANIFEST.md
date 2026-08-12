@@ -1,11 +1,22 @@
 # MANIFEST — ground truth
 
 ```
-version: 0.7.0
+version: 0.8.0
 ```
 
 **Cite this version and both dial settings with any published score, or the
 number is not reproducible.** `/__manifest` returns all three.
+
+**OWASP mapping is Top 10:2025**, not 2021 — the two are not interchangeable and
+this fixture is dated. The 2025 renumbering matters here because it is the whole
+shape of the corpus: Security Misconfiguration rose to **A02** (was A05) and
+Injection fell to **A05** (was A03), so on this fixture A01 Broken Access Control
++ A02 Security Misconfiguration are ~two thirds of all security findings and
+injection is three. `err-001` and `info-002` map to the new **A10 Mishandling of
+Exceptional Conditions**. Nothing maps to **A03 Software Supply Chain** by
+design — the fixture tests application configuration, not dependency versions
+(see the scope note below). An earlier revision carried 2021 numbers under the
+`owasp_2025` name; that was corrected in 0.8.0.
 
 **Status: passes A and B complete, coverage gaps closed, auth-failure taxonomy added.** 45 findings, 29 controls declared across
 all modes; `/__manifest` reports how many are present in the current one.
@@ -314,7 +325,7 @@ has been checked, not everything that is true.
   name: PostgREST OpenAPI root discloses the full schema to the anon key
   category: information-disclosure
   cwe: CWE-200
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: baas-direct
   reachable_by_other_means: false
   location: GET http://localhost:8055/rest/v1/
@@ -340,7 +351,7 @@ has been checked, not everything that is true.
   name: Verbose SQL errors leak column names and SQLSTATE codes
   category: information-disclosure
   cwe: CWE-209
-  owasp_2025: A05
+  owasp_2025: A10
   discovery_mechanism: baas-direct
   reachable_by_other_means: false
   location: PostgREST error responses
@@ -361,7 +372,7 @@ has been checked, not everything that is true.
   name: Session cookie is not HttpOnly, not Secure, and lives 400 days
   category: session-management
   cwe: CWE-1004
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: authed-discovery
   reachable_by_other_means: false
   location: Set-Cookie `sb-localhost-auth-token` from /app/*
@@ -421,7 +432,7 @@ has been checked, not everything that is true.
   name: Supabase errors discarded across 13 call sites
   category: error-handling
   cwe: CWE-390
-  owasp_2025: n/a
+  owasp_2025: A10
   discovery_mechanism: source-review        # not reachable by black-box probing
   reachable_by_other_means: false
   location: web/src — 9 read paths, 4 write paths
@@ -450,7 +461,7 @@ has been checked, not everything that is true.
   name: No security response headers on any app route
   category: security-misconfiguration
   cwe: CWE-693
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: static-crawl
   reachable_by_other_means: false
   location: all /app/* responses
@@ -472,7 +483,7 @@ has been checked, not everything that is true.
   name: X-Powered-By discloses the framework
   category: security-misconfiguration
   cwe: CWE-200
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: static-crawl
   reachable_by_other_means: false
   location: all /app/* responses
@@ -487,7 +498,7 @@ has been checked, not everything that is true.
   name: PostgREST version banner on the data API
   category: security-misconfiguration
   cwe: CWE-200
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: baas-direct
   reachable_by_other_means: false
   location: all /rest/v1/* responses
@@ -572,7 +583,7 @@ has been checked, not everything that is true.
   name: Public storage bucket serves files to anonymous callers
   category: security-misconfiguration
   cwe: CWE-732
-  owasp_2025: A01
+  owasp_2025: A02
   discovery_mechanism: baas-direct
   reachable_by_other_means: false
   location: bucket `project-media` via /storage/v1/object/public/
@@ -613,7 +624,7 @@ has been checked, not everything that is true.
   name: service_role key shipped in the client bundle
   category: sensitive-data-exposure
   cwe: CWE-522
-  owasp_2025: A02
+  owasp_2025: A04
   discovery_mechanism: bundle-mining
   reachable_by_other_means: false
   location: NEXT_PUBLIC_SUPABASE_SERVICE_KEY, used by src/components/SponsorSync.tsx
@@ -642,7 +653,7 @@ has been checked, not everything that is true.
   name: OpenAI-shaped API key shipped in the client bundle
   category: sensitive-data-exposure
   cwe: CWE-522
-  owasp_2025: A02
+  owasp_2025: A04
   discovery_mechanism: bundle-mining
   reachable_by_other_means: false
   location: NEXT_PUBLIC_FAKE_OPENAI_KEY, sent as a Bearer token by DraftAssistant.tsx
@@ -685,7 +696,7 @@ has been checked, not everything that is true.
   name: Full system prompt embedded as a string literal in the client bundle
   category: information-disclosure
   cwe: CWE-200
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: bundle-mining
   reachable_by_other_means: false
   location: SYSTEM_PROMPT in src/components/DraftAssistant.tsx
@@ -706,7 +717,7 @@ has been checked, not everything that is true.
   name: Synthetic personal data interpolated into the client-side prompt
   category: sensitive-data-exposure
   cwe: CWE-359
-  owasp_2025: A02
+  owasp_2025: A04
   discovery_mechanism: bundle-mining
   reachable_by_other_means: false
   location: DEMO_ACCOUNT in src/components/DraftAssistant.tsx
@@ -727,7 +738,7 @@ has been checked, not everything that is true.
   name: PostgREST filter injection in project search
   category: injection
   cwe: CWE-943
-  owasp_2025: A03
+  owasp_2025: A05
   discovery_mechanism: suffix-convention
   reachable_by_other_means: false
   location: GET /app/api/projects/search?q=
@@ -760,7 +771,7 @@ has been checked, not everything that is true.
   name: Attacker-controlled render template accepted from the request body
   category: injection
   cwe: CWE-1236
-  owasp_2025: A03
+  owasp_2025: A05
   discovery_mechanism: schema-error
   reachable_by_other_means: false
   location: POST /app/api/feedback, field `renderTemplate`
@@ -804,7 +815,7 @@ has been checked, not everything that is true.
   name: Deployment .env served under the app root
   category: sensitive-data-exposure
   cwe: CWE-538
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: path-probe
   reachable_by_other_means: false
   location: GET http://localhost:8090/app/.env
@@ -845,7 +856,7 @@ has been checked, not everything that is true.
   name: Git config with an embedded credential served under the app root
   category: sensitive-data-exposure
   cwe: CWE-538
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: path-probe
   reachable_by_other_means: false
   location: GET http://localhost:8090/app/.git/config
@@ -943,7 +954,7 @@ has been checked, not everything that is true.
   name: Body-only parameter discoverable solely from a validation error
   category: information-disclosure
   cwe: CWE-200
-  owasp_2025: A05
+  owasp_2025: A02
   discovery_mechanism: schema-error
   reachable_by_other_means: false
   location: POST {basePath}/api/summarize, field `toneProfile`
@@ -1037,7 +1048,7 @@ has been checked, not everything that is true.
   name: Stored XSS via unescaped project description
   category: injection
   cwe: CWE-79
-  owasp_2025: A03
+  owasp_2025: A05
   discovery_mechanism: static-crawl
   reachable_by_other_means: false
   location: GET {basePath}/p/{slug}/rich
