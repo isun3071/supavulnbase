@@ -16,8 +16,8 @@ outside this compose project.
 
 `BuildLog` is a project journal for building in public: people post a project,
 then log daily updates under it. It has the shape of an overnight hackathon
-submission because that is the point. It measures whether a grader can **reach**
-a finding, not merely whether it can detect one it has been handed.
+submission on purpose. The question it poses is whether a grader can **reach** a
+finding, not merely detect one it has been handed.
 
 It fills a gap left by the existing corpus. GapBench scenarios are emulated and
 have no registerable account or database. OopsSec Store is real but runs its own
@@ -31,8 +31,8 @@ modern hackathon submissions actually use.
 docker compose up
 ```
 
-That is the whole setup. It brings up Postgres, GoTrue, PostgREST, Storage, a
-Kong gateway, applies the SQL migrations, seeds four demo accounts with
+One command does the rest. It brings up Postgres, GoTrue, PostgREST, Storage,
+and a Kong gateway, applies the SQL migrations, seeds four demo accounts with
 overlapping records, and builds and serves the app.
 
 | Surface | URL |
@@ -48,13 +48,13 @@ Check the target against its answer key at any time:
 ./verify.sh          # 91 assertions; more with PERF_MODE=on; fails on drift
 ```
 
-`http://localhost:8090/` returns 404 by design. The app lives at `/app`. This is
-deliberate. A probe that guesses paths against the origin instead of the app
-root passes every fixture served at the root and reports clean, and that bug is
-invisible unless the target is served under a subpath.
+`http://localhost:8090/` returns 404 by design. The app lives at `/app`, and
+the subpath is deliberate. A probe that guesses paths against the origin instead
+of the app root passes every fixture served at the root and reports clean, and
+that bug is invisible unless the target is served under a subpath.
 
-That trap is live. `GET /app/.env` returns a deployment env file containing the
-JWT signing secret. `GET /.env` at the origin returns 404. A probe that resolves
+`GET /app/.env` returns a deployment env file containing the JWT signing secret,
+while `GET /.env` at the origin returns 404. A probe that resolves
 against the origin reports this target clean while a critical leak sits one
 prefix away.
 
@@ -176,7 +176,8 @@ for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_starttransfer}\n' \
 Nothing about the target changes between the two runs, so **numbers that move
 mean the probes are contending with each other rather than measuring the
 target.** Every other fixture varies for its own reasons, real network, real
-backends, real caches, so a shift there is unattributable. Here it is not.
+backends, real caches, so a shift there is unattributable. On this one, the
+probes are the only thing that can move the number.
 
 ## Three things to know before you trust a run
 
@@ -198,9 +199,9 @@ misconfiguration. It says nothing about dependency or middleware
 vulnerabilities.
 
 **Localhost is not the internet.** There is no packet loss, no TLS handshake, no
-geographic latency, and no bandwidth ceiling. That is deliberate: it makes the
-fixture deterministic, which is what lets it validate that an instrument is
-*correct*. It also means any threshold calibrated here will be wrong in the
+geographic latency, and no bandwidth ceiling. The absence is deliberate, and it
+makes the fixture deterministic, which is what lets it validate that an
+instrument is *correct*. It also means any threshold calibrated here will be wrong in the
 field. Calibration belongs to the corpus from the field. This repo establishes
 instrument correctness only.
 

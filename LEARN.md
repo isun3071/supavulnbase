@@ -1,7 +1,7 @@
 # Learn Supabase security by breaking BuildLog
 
-This is a guided tour of how Supabase apps leak data, using the running fixture
-as a lab. You read a footgun, reproduce it with one command against the live
+This document walks through how Supabase apps leak data, using the running
+fixture as a lab. You read a footgun, reproduce it with one command against the live
 target, then watch the fix take hold. No prior Supabase knowledge is assumed.
 
 Every command here runs against the vulnerable target on `http://localhost:8090`.
@@ -60,7 +60,7 @@ Security, a set of Postgres policies that filter every query by who is asking.
 Turn RLS off, or write a policy that says less than you think it says, and the
 anon key in every visitor's browser becomes a key to the whole table.
 
-That single shift is the source of most of what follows.
+Most of what follows comes from that single shift.
 
 ---
 
@@ -72,8 +72,8 @@ schema by default, so the table is now open to the world through PostgREST.
 
 Why it happens so often. The Supabase dashboard prompts you to turn RLS on when
 you create a table by clicking. A SQL migration does not prompt you. Every code
-generator writes migrations. The result is a table that looks finished and has
-no guard at all.
+generator writes migrations, so the table looks finished and carries no guard
+at all.
 
 See it. Read every project with the public key and no account:
 
@@ -154,8 +154,7 @@ The footgun. You probe a table with a write, PostgREST answers `204 No
 Content`, and you record it as a successful write. PostgREST returns `204` for a
 write that changed zero rows exactly as it does for one that changed a hundred.
 
-Why it matters. This is the trap that turns a careful reviewer into a false
-alarm. The `profiles` table in this fixture is locked down correctly. An
+Why it matters. A `204` turns a careful reviewer into a false alarm. The `profiles` table in this fixture is locked down correctly. An
 anonymous write to it returns `204` and changes nothing. A reviewer who trusts
 the status code reports a critical hole in a table that is fine.
 
@@ -233,8 +232,8 @@ secret. The second returns `404`. A tool that only ever asks the origin reports
 this target clean while a critical secret sits one prefix away.
 
 The lesson for your own apps. Path guessing has to resolve against the app root,
-not the domain root. This is one of the reasons the fixture ships a second copy
-served at the root on port 8091. Point your tool at both. A tool that finds the
+not the domain root. The fixture ships a second copy served at the root on port
+8091 for exactly this reason. Point your tool at both. A tool that finds the
 leak only on one is resolving paths against the wrong prefix, and now you know.
 
 ---
@@ -252,8 +251,8 @@ curl "http://localhost:8055/rest/v1/" -H "apikey: $ANON" | head -c 400
 ```
 
 You get the data model for free: the names of the tables, the `user_id` columns,
-the relationships. This is a default, not a bug in the code, which is why the
-fixture keeps it open. It also means any secret you hoped to hide behind an
+the relationships. PostgREST does this by default rather than through a coding
+mistake, so the fixture keeps it open. It also means any secret you hoped to hide behind an
 unknown parameter name is not hidden, because the schema is public.
 
 The lesson for your own apps. Assume an attacker knows your schema. Do not rely
@@ -266,8 +265,8 @@ reader and a row is the policy on that row.
 
 The footgun. A route builds a PostgREST filter by pasting user input into a
 query string. PostgREST filters are comma separated, so a comma in the input
-adds a condition the developer never wrote. This is injection, but the grammar
-being injected is PostgREST's filter language, not SQL.
+adds a condition the developer never wrote. The bug is injection, but the
+grammar being injected is PostgREST's filter language, not SQL.
 
 See it. The search route at `/api/projects/search` matches a term against the
 project titles. A term that matches nothing returns nothing:
@@ -287,8 +286,8 @@ the injected `id.not.is.null` widened the filter to the whole table.
 
 The finding also hides on purpose. The path `/api/projects/search` appears
 nowhere in the served pages or the JavaScript bundle. You reach it by guessing a
-conventional suffix on the `/api/projects` collection. That is the fixture's
-larger point: reaching a bug is often harder than detecting it.
+conventional suffix on the `/api/projects` collection. The fixture's larger
+point lives in that gap: reaching a bug is often harder than detecting it.
 
 The lesson for your own apps. Never paste user input into a filter string.
 Escape the delimiters, or pass values through the client library's parameter
@@ -389,8 +388,8 @@ CWE, the OWASP 2025 category, and, for the controls, the reason a tool that
 flags it is wrong. The findings map cleanly onto the 2025 top ten, and the shape
 is worth noticing: Broken Access Control and Security Misconfiguration together
 account for two thirds of the security findings, and classic injection accounts
-for three. That balance is the real state of Supabase apps in the field. The
-database moved into the browser, and the failures moved with it.
+for three. Real Supabase apps show the same balance. The database moved into the
+browser, and the failures moved with it.
 
 `README.md` is the companion for testing a scanner instead of learning. It
 covers the dials, the hardened reference, and the answer key served over HTTP.
