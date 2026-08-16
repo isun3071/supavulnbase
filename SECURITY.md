@@ -35,5 +35,5 @@ can be added to the ground truth.
 
 ## Reporting a problem with the fixture itself
 
-Some bugs are worth reporting: a fixture that fails to run, a finding the
-manifest does not describe, or a control that is misclassified. Open an issue.
+Report a fixture that fails to run, a finding the manifest does not describe,
+or a control that is misclassified. Open an issue for it.
