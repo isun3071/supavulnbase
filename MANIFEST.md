@@ -126,9 +126,9 @@ would be a separate compose profile or a separate repo.
 
 | Dial | Env var | Settings | What changes |
 |---|---|---|---|
-| RLS | `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
-| Discovery | `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
-| Perf | `PERF_MODE` | `on` · `off` | Whether the `/perf/*` route group exists at all. Off by default: a three-second sleep in a normal crawl would slow the crawler, trip timeouts and could gate off the security and QA probes. |
+| RLS | `RLS_MODE` | `off`, `permissive`, `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
+| Discovery | `DISCOVERY_MODE` | `linked`, `bundle`, `interaction`, `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+| Perf | `PERF_MODE` | `on`, `off` | Whether the `/perf/*` route group exists at all. Off by default: a three-second sleep in a normal crawl would slow the crawler, trip timeouts and could gate off the security and QA probes. |
 
 **Canonical mode is `RLS_MODE=off` + `DISCOVERY_MODE=linked` + `PERF_MODE=off`.**
 

@@ -141,10 +141,10 @@ Four dials, set in [`.env`](.env):
 
 | Dial | Settings | What changes |
 |---|---|---|
-| `RLS_MODE` | `off` · `permissive` · `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
-| `DISCOVERY_MODE` | `linked` · `bundle` · `interaction` · `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
-| `SIGNUP_MODE` | `normal` · `interaction` · `unlabeled` · `login-only` · `confirm` · `sso` | How registration behaves. Reproduces the measured auth failure taxonomy. `confirm` and `sso` are controls that must stay N/A. Use `./signup.sh <mode>`. |
-| `PERF_MODE` | `on` · `off` | Whether `/app/perf/*` exists. Off by default, because a 3s sleep in a normal crawl would slow the crawler and could gate off other probes. |
+| `RLS_MODE` | `off`, `permissive`, `correct` | Only the policies on `public.bookmarks`. Table, columns and seed data are identical in all three. |
+| `DISCOVERY_MODE` | `linked`, `bundle`, `interaction`, `concatenated` | Only how `/api/bookmarks/all` can be found. The route behaves identically in all four. |
+| `SIGNUP_MODE` | `normal`, `interaction`, `unlabeled`, `login-only`, `confirm`, `sso` | How registration behaves. Reproduces the measured auth failure taxonomy. `confirm` and `sso` are controls that must stay N/A. Use `./signup.sh <mode>`. |
+| `PERF_MODE` | `on`, `off` | Whether `/app/perf/*` exists. Off by default, because a 3s sleep in a normal crawl would slow the crawler and could gate off other probes. |
 
 Canonical is `RLS_MODE=off` plus `DISCOVERY_MODE=linked` plus `PERF_MODE=off`
 plus `SIGNUP_MODE=normal`.
