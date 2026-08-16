@@ -107,7 +107,7 @@ class, the finding ids it fixes, and the **expected residual**. With
 `llm-001` `llm-002` `sum-001` `info-001` `info-002` `cookie-001` `ui-001`
 `err-001` `hdr-003`
 
-These are genuinely still present and **a grader is correct to report them**.
+These are still present and **a grader is correct to report them**.
 They survive because no class in the set addresses them: the client-side prompt
 and its synthetic account data are still bundle literals, PostgREST still
 publishes its OpenAPI root, its version banner and verbose errors, the session
@@ -794,8 +794,8 @@ has been checked, not everything that is true.
     legitimate report builder or email-preview feature accepts a caller-supplied
     template and reflects it, so there was no observable difference between this
     app and a correct one. Firing on a field merely named `renderTemplate` would
-    have been a naming heuristic, not evidence. The template is now genuinely
-    evaluated server side, which makes it real SSTI with a provable signal.
+    have been a naming heuristic, not evidence. The template is now
+    evaluated on the server, which makes it real SSTI with a provable signal.
     SCOPE, STATED PRECISELY SO THIS DOES NOT OVERCLAIM. The evaluator in
     web/src/lib/template.ts is not a general code evaluator. It supports
     numbers, the named context variables, + - * / %, and parentheses. There is
@@ -1006,7 +1006,7 @@ has been checked, not everything that is true.
     so it is indistinguishable from a path that was never implemented. Only a
     grader that carries a session INTO THE CRAWL, rather than merely into its
     probes, ever sees it.
-    The data is genuinely new. Email addresses live in auth.users and appear
+    The data is new. Email addresses live in auth.users and appear
     nowhere else in this fixture: public.profiles carries username, display name
     and bio only, and admin-001's export contains no emails (verified: 0
     occurrences). So this is not a restatement of another entry.
@@ -1199,7 +1199,7 @@ has been checked, not everything that is true.
   notes: |
     Constructed, not natural — see the block header. The list is held in client
     state seeded once, and `router.refresh()` is omitted on purpose. The write
-    genuinely lands, which is what makes this dishonest rather than broken.
+    lands, which is what makes this dishonest rather than broken.
     SHIPPED BROKEN ONCE, AND THE CONTROL WITH IT. The page originally passed a
     hardcoded array into the component instead of reading the store, so no
     render ever reflected a write — a manual reload did not update the list
@@ -1278,7 +1278,7 @@ has been checked, not everything that is true.
   notes: |
     Usually arrives in real code via a well-meant "are you sure you want to
     leave?" guard. No HTTP probe and no static analysis can see it; this one
-    genuinely requires driving a browser.
+    requires driving a browser.
 
 - id: ui-006
   name: Served HTML references a JS chunk that 404s
@@ -1464,7 +1464,7 @@ has been checked, not everything that is true.
     natural omission rather than a plant: self-hosted GoTrue does not
     rate-limit the password grant by default, while hosted Supabase does. The
     stack simply inherited the default and nobody decided otherwise.
-    It is genuinely reachable two ways — by crawling to the login form, or by
+    It is reachable two ways — by crawling to the login form, or by
     hitting the Supabase auth API directly — so unlike most entries here it is
     not gated behind a single mechanism. Left that way because narrowing it
     would mean breaking the login form, which is not worth it.
@@ -1584,7 +1584,7 @@ has been checked, not everything that is true.
   verified_by: |
     GET http://localhost:8090/.env         -> 404
     GET http://localhost:8090/.git/config  -> 404
-    GET http://localhost:8090/app/package.json -> 404 (genuinely absent)
+    GET http://localhost:8090/app/package.json -> 404 (absent)
     The first two return 200 under /app/ — see probe-001 and probe-002.
   why_flagging_this_is_wrong: |
     REVISED IN THE PLANTING PASS. This entry previously stated that nothing was
