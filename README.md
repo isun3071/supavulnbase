@@ -83,6 +83,12 @@ All use the password `demo-password-123`.
 
 Self-registration works over plain HTTP at `/app/signup`.
 
+## Learning path
+
+New to Supabase security? [`LEARN.md`](LEARN.md) is a guided tour: nine footguns,
+each reproduced with one command against the running app and then repaired, in
+order from the obvious to the subtle.
+
 ## Ground truth
 
 [`MANIFEST.md`](MANIFEST.md) is the answer key: every known finding, its
